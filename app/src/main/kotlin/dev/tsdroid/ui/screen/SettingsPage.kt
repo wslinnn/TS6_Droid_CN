@@ -1,10 +1,12 @@
 package dev.tsdroid.ui.screen
 
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,6 +35,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import coil.compose.AsyncImage
 import dev.tsdroid.data.SettingsStore
 import dev.tsdroid.han.R
@@ -68,6 +72,10 @@ fun SettingsPage(
     var pendingLanguageTag by remember { mutableStateOf<String?>(null) }
     val activity = context as? Activity
 
+    // 悬浮窗开关的权限引导（决议①）：开启且无权限时先引导授权，授权成功才真正持久化为开
+    var showOverlayPermissionDialog by remember { mutableStateOf(false) }
+    var awaitingOverlayGrant by remember { mutableStateOf(false) }
+
     pendingLanguageTag?.let { languageTag ->
         val label = languageOptions.firstOrNull { it.first == languageTag }?.second ?: languageTag
         AlertDialog(
@@ -94,6 +102,56 @@ fun SettingsPage(
         )
     }
 
+    // 悬浮窗开关的权限引导（决议①）：说明对话框只有「去开启权限」单选路径
+    if (showOverlayPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showOverlayPermissionDialog = false
+                awaitingOverlayGrant = false
+            },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            title = { Text(stringResource(R.string.overlay_permission_title)) },
+            text = { Text(stringResource(R.string.overlay_permission_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    try {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:${context.packageName}"),
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                        awaitingOverlayGrant = true
+                    } catch (_: Exception) {
+                        showOverlayPermissionDialog = false
+                        awaitingOverlayGrant = false
+                    }
+                }) {
+                    Text(stringResource(R.string.overlay_permission_next))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showOverlayPermissionDialog = false
+                    awaitingOverlayGrant = false
+                }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
+    // 从系统设置返回：已授权才把开关真正持久化为开；未授权/取消则维持关
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        if (awaitingOverlayGrant) {
+            awaitingOverlayGrant = false
+            showOverlayPermissionDialog = false
+            if (Settings.canDrawOverlays(context)) {
+                scope.launch { settingsStore.setEnableFloatingWindow(true) }
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -113,7 +171,15 @@ fun SettingsPage(
                 SettingsSwitchRow(
                     label = stringResource(R.string.enable_floating_window),
                     checked = enableFloatingWindow,
-                    onCheckedChange = { scope.launch { settingsStore.setEnableFloatingWindow(it) } },
+                    onCheckedChange = { checked ->
+                        if (checked && !Settings.canDrawOverlays(context)) {
+                            // 决议①：无权限时先引导授权，授权返回后开关才保持开；
+                            // 取消或未授权则不写入，开关回退为关
+                            showOverlayPermissionDialog = true
+                        } else {
+                            scope.launch { settingsStore.setEnableFloatingWindow(checked) }
+                        }
+                    },
                 )
 
                 // 动漫背景
