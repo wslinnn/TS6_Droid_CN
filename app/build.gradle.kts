@@ -9,11 +9,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.yuaxi.ts6droid.cn"
+        applicationId = "com.wslinnn.ts6mobile"
         minSdk = 29
         targetSdk = 35
-        versionCode = 9
-        versionName = "2.1.4-Han"
+        versionCode = 10
+        versionName = "2.2.0-Han"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -66,7 +66,7 @@ fun SplashScreen(onReady: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
             Text(
-                text = "TS6 Droid",
+                text = "TS6 Mobile",
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary,
