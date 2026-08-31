@@ -842,6 +842,14 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             return state
         }
 
+        // The channelId comes from the sender's message text; refuse targets
+        // that don't exist on this server so a crafted link can't make the
+        // client pull files from an arbitrary channel
+        if (attachment.channelId != 0L && _channels.value.isNotEmpty() && _channels.value.none { it.id == attachment.channelId }) {
+            state.value = DownloadState.Error(getApplication<Application>().getString(R.string.download_failed))
+            return state
+        }
+
         downloadCache[cacheKey] = state
 
         viewModelScope.launch(Dispatchers.IO) {
