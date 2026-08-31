@@ -8,6 +8,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class AvatarCache(private val cacheDir: File) {
 
@@ -67,53 +69,57 @@ class AvatarCache(private val cacheDir: File) {
         if (loading.putIfAbsent(uid, true) != null) return
 
         try {
-            // UID contains / and = which are invalid in filenames — URL-encode for disk cache
-            val safeFileName = URLEncoder.encode(uid, "UTF-8")
-            val diskFile = File(avatarsDir, safeFileName)
-            var bytes: ByteArray? = null
-            var fromDisk = false
+            // Disk I/O and the JNI download must not run on the caller's
+            // (main) dispatcher — both call sites collect from the UI side
+            withContext(Dispatchers.IO) {
+                // UID contains / and = which are invalid in filenames — URL-encode for disk cache
+                val safeFileName = URLEncoder.encode(uid, "UTF-8")
+                val diskFile = File(avatarsDir, safeFileName)
+                var bytes: ByteArray? = null
+                var fromDisk = false
 
-            // Try disk cache first
-            if (diskFile.exists() && diskFile.length() > 0) {
-                bytes = diskFile.readBytes()
-                fromDisk = true
-                Log.d(TAG, "Read avatar from disk for $uid (${bytes.size} bytes)")
-            }
+                // Try disk cache first
+                if (diskFile.exists() && diskFile.length() > 0) {
+                    bytes = diskFile.readBytes()
+                    fromDisk = true
+                    Log.d(TAG, "Read avatar from disk for $uid (${bytes.size} bytes)")
+                }
 
-            // Try decoding if we have disk data
-            if (fromDisk && bytes != null) {
+                // Try decoding if we have disk data
+                if (fromDisk && bytes != null) {
+                    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    if (bitmap != null) {
+                        memoryCache[uid] = bitmap.asImageBitmap()
+                        Log.d(TAG, "Loaded avatar from disk cache for $uid")
+                        return@withContext
+                    }
+                    Log.w(TAG, "Corrupt avatar on disk for $uid, deleting and re-downloading")
+                    diskFile.delete()
+                    bytes = null
+                }
+
+                // Download from server using UID-based path
+                val path = uidToAvatarPath(uid)
+                Log.d(TAG, "Downloading avatar for $uid at path $path")
+                bytes = tsClient.downloadFile(0L, path)
+
+                if (bytes == null || bytes.isEmpty()) {
+                    Log.w(TAG, "Download returned empty/null for $uid (attempt ${(failedAttempts[uid] ?: 0) + 1}/$MAX_RETRIES)")
+                    failedAttempts.merge(uid, 1, Integer::sum)
+                    return@withContext
+                }
+
+                Log.d(TAG, "Downloaded avatar for $uid: ${bytes.size} bytes")
+
                 val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 if (bitmap != null) {
+                    diskFile.writeBytes(bytes)
                     memoryCache[uid] = bitmap.asImageBitmap()
-                    Log.d(TAG, "Loaded avatar from disk cache for $uid")
-                    return
+                    Log.i(TAG, "Avatar loaded for $uid")
+                } else {
+                    Log.w(TAG, "Failed to decode downloaded avatar for $uid (${bytes.size} bytes)")
+                    failedAttempts.merge(uid, 1, Integer::sum)
                 }
-                Log.w(TAG, "Corrupt avatar on disk for $uid, deleting and re-downloading")
-                diskFile.delete()
-                bytes = null
-            }
-
-            // Download from server using UID-based path
-            val path = uidToAvatarPath(uid)
-            Log.d(TAG, "Downloading avatar for $uid at path $path")
-            bytes = tsClient.downloadFile(0L, path)
-
-            if (bytes == null || bytes.isEmpty()) {
-                Log.w(TAG, "Download returned empty/null for $uid (attempt ${(failedAttempts[uid] ?: 0) + 1}/$MAX_RETRIES)")
-                failedAttempts.merge(uid, 1, Integer::sum)
-                return
-            }
-
-            Log.d(TAG, "Downloaded avatar for $uid: ${bytes.size} bytes")
-
-            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            if (bitmap != null) {
-                diskFile.writeBytes(bytes)
-                memoryCache[uid] = bitmap.asImageBitmap()
-                Log.i(TAG, "Avatar loaded for $uid")
-            } else {
-                Log.w(TAG, "Failed to decode downloaded avatar for $uid (${bytes.size} bytes)")
-                failedAttempts.merge(uid, 1, Integer::sum)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to load avatar for $uid", e)
