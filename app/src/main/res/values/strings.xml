@@ -173,7 +173,7 @@
     <string name="download_failed">Échec du téléchargement</string>
 
     <!-- AboutScreen -->
-    <string name="about_software">À propos / About</string>
+    <string name="about_software">À propos</string>
     <string name="about_back">← Retour</string>
     <string name="about_credits_title">Crédits &amp; Origines</string>
     <string name="about_credits_desc">Ce projet est basé sur l\'excellent projet open-source de Grégory D, avec une localisation approfondie et des améliorations de fonctionnalités. Un grand merci à l\'auteur original pour ses contributions exceptionnelles à la communauté vocale open-source !</string>

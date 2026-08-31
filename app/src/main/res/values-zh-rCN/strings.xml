@@ -172,7 +172,7 @@
     <string name="download_failed">下载失败</string>
 
     <!-- AboutScreen -->
-    <string name="about_software">关于软件 / About</string>
+    <string name="about_software">关于软件</string>
     <string name="about_back">← 返回</string>
     <string name="about_credits_title">致谢与开发源流</string>
     <string name="about_credits_desc">本项目基于 Grégory D 的优秀开源项目进行深度汉化、本地化适配与功能二次开发。由衷感谢原作者对开源语音社区做出的杰出贡献！</string>
