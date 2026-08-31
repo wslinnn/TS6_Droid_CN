@@ -142,7 +142,7 @@ fun UserItem(
                 ) {
                     Icon(
                         Icons.Default.Forum,
-                        contentDescription = "密聊",
+                        contentDescription = stringResource(R.string.whisper),
                         modifier = Modifier.size(16.dp),
                         tint = if (WhisperManager.isWhisperActive && WhisperManager.whisperTargets.contains(user.id)) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     )

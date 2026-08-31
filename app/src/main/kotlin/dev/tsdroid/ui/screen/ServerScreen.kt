@@ -357,7 +357,7 @@ fun ServerScreen(
                         IconButton(onClick = { viewModel.toggleWhisper(WhisperManager.whisperTargets.first()) }) {
                             Icon(
                                 Icons.Default.Forum,
-                                contentDescription = "停止密聊",
+                                contentDescription = stringResource(R.string.whisper_stop),
                                 tint = Color(0xFF4CAF50),
                             )
                         }
@@ -368,7 +368,7 @@ fun ServerScreen(
                         ) {
                             Icon(
                                 Icons.Default.Forum,
-                                contentDescription = "密聊",
+                                contentDescription = stringResource(R.string.whisper),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                             )
                         }
@@ -749,7 +749,7 @@ fun ChatPanel(
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            text = "文字密聊 ${whisperTargetName}",
+                            text = stringResource(R.string.whisper_placeholder, whisperTargetName),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
@@ -800,7 +800,7 @@ fun ChatPanel(
                         Text(
                             when {
                                 isWhisperActive && whisperTargetName != null ->
-                                    "文字密聊 ${whisperTargetName}..."
+                                    stringResource(R.string.whisper_placeholder, whisperTargetName)
                                 chatTab == 0 -> stringResource(R.string.message_channel_placeholder)
                                 else -> stringResource(R.string.message_private_placeholder, pmTarget?.nickname ?: "?")
                             }

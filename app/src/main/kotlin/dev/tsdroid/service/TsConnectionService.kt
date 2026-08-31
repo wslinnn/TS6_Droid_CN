@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -794,7 +795,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                             // Have an avatar available: show it
                             androidx.compose.foundation.Image(
                                 bitmap = displayAvatar,
-                                contentDescription = "Avatar",
+                                contentDescription = stringResource(R.string.overlay_avatar),
                                 modifier = Modifier.fillMaxSize().clip(CircleShape),
                                 contentScale = ContentScale.Crop,
                                 alpha = 1.0f
@@ -803,7 +804,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                             // Speaking but no avatar: show person icon
                             Icon(
                                 Icons.Default.Person,
-                                contentDescription = "Active Speaker",
+                                contentDescription = stringResource(R.string.overlay_active_speaker),
                                 tint = Color.White,
                                 modifier = Modifier.align(Alignment.Center)
                             )
@@ -811,7 +812,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                             // No speaker: Show software logo
                             androidx.compose.foundation.Image(
                                 painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_launcher_foreground),
-                                contentDescription = "Open Panel",
+                                contentDescription = stringResource(R.string.overlay_open_panel),
                                 modifier = Modifier
                                     .align(Alignment.Center)
                                     .fillMaxSize(0.8f),
@@ -869,7 +870,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = channelName ?: "Offline",
+                                text = channelName ?: stringResource(R.string.overlay_offline),
                                 style = MaterialTheme.typography.titleMedium,
                                 color = Color.White,
                                 modifier = Modifier.weight(1f),
@@ -877,7 +878,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                                 overflow = TextOverflow.Ellipsis
                             )
                             IconButton(onClick = onToggleExpand, modifier = Modifier.size(28.dp)) {
-                                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Minimize", tint = Color.White)
+                                Icon(Icons.Default.KeyboardArrowDown, contentDescription = stringResource(R.string.overlay_minimize), tint = Color.White)
                             }
                         }
 
@@ -972,7 +973,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                             ) {
                                 Icon(
                                     imageVector = if (isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                                    contentDescription = "Toggle Mic",
+                                    contentDescription = stringResource(if (isMicMuted) R.string.unmute_mic else R.string.mute_mic),
                                     tint = Color.White
                                 )
                             }
@@ -987,7 +988,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                             ) {
                                 Icon(
                                     imageVector = if (isOutputMuted) Icons.Default.HeadsetOff else Icons.Default.Headset,
-                                    contentDescription = "Toggle Output",
+                                    contentDescription = stringResource(if (isOutputMuted) R.string.notif_unmute else R.string.notif_mute),
                                     tint = Color.White
                                 )
                             }
@@ -999,7 +1000,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.ExitToApp,
-                                    contentDescription = "Disconnect",
+                                    contentDescription = stringResource(R.string.disconnect),
                                     tint = Color(0xFFFF5252)
                                 )
                             }

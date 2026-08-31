@@ -115,6 +115,14 @@
     <string name="tap_to_load_images">点击加载图片</string>
     <string name="retry">重试</string>
     <string name="file_too_large">文件超过 10MB 上限，已取消上传</string>
+    <string name="whisper">密聊</string>
+    <string name="whisper_stop">停止密聊</string>
+    <string name="whisper_placeholder">文字密聊 %1$s…</string>
+    <string name="overlay_offline">未连接</string>
+    <string name="overlay_minimize">收起</string>
+    <string name="overlay_avatar">头像</string>
+    <string name="overlay_active_speaker">正在发言</string>
+    <string name="overlay_open_panel">打开面板</string>
     <string name="tap_to_open">点击打开</string>
     <string name="downloading">下载中…</string>
     <string name="download">下载</string>

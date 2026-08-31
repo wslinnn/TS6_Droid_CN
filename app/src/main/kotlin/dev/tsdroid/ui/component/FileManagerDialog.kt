@@ -62,7 +62,7 @@ import dev.tsdroid.han.R
 import dev.tsdroid.bridge.TsFileEntry
 import dev.tslib.Channel
 import dev.tslib.User
-import java.text.SimpleDateFormat
+import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
@@ -396,6 +396,7 @@ private fun FileEntryRow(
     onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val context = LocalContext.current
     var showMenu by remember { mutableStateOf(false) }
 
     Row(
@@ -426,21 +427,21 @@ private fun FileEntryRow(
 
         Spacer(Modifier.width(12.dp))
 
-        // Name + details
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = entry.name,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (entry.isFile) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Name + details
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = formatFileSize(entry.size),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        text = entry.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
+                    if (entry.isFile) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = formatFileSize(context, entry.size),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                     Text(
                         text = formatTimestamp(entry.datetime),
                         style = MaterialTheme.typography.bodySmall,
@@ -543,19 +544,24 @@ private fun isImageFile(name: String): Boolean {
     return ext in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
 }
 
-private fun formatFileSize(bytes: Long): String {
-    return when {
-        bytes < 1024 -> "$bytes o"
-        bytes < 1024 * 1024 -> "%.1f Ko".format(bytes / 1024.0)
-        bytes < 1024 * 1024 * 1024 -> "%.1f Mo".format(bytes / (1024.0 * 1024.0))
-        else -> "%.1f Go".format(bytes / (1024.0 * 1024.0 * 1024.0))
-    }
+// Localized via the shared file_size_* strings (same formatting as chat attachments)
+private fun formatFileSize(context: android.content.Context, bytes: Long): String {
+    if (bytes < 1024) return context.getString(R.string.file_size_bytes, bytes)
+    val kb = bytes / 1024.0
+    if (kb < 1024) return context.getString(R.string.file_size_kb, kb)
+    val mb = kb / 1024.0
+    if (mb < 1024) return context.getString(R.string.file_size_mb, mb)
+    val gb = mb / 1024.0
+    return context.getString(R.string.file_size_gb, gb)
 }
 
 private fun formatTimestamp(unixSeconds: Long): String {
     return try {
-        val sdf = SimpleDateFormat("dd/MM/yy HH:mm", Locale.getDefault())
-        sdf.format(Date(unixSeconds * 1000))
+        java.text.DateFormat.getDateTimeInstance(
+            java.text.DateFormat.SHORT,
+            java.text.DateFormat.SHORT,
+            Locale.getDefault(),
+        ).format(Date(unixSeconds * 1000))
     } catch (_: Exception) {
         ""
     }
