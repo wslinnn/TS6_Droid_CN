@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cloud backup / auto backup rules for API <= 30 -->
+<full-backup-content>
+    <!-- TeamSpeak identity (the account's private key) -->
+    <exclude domain="file" path="identity.ini" />
+    <!-- Saved bookmarks, which contain server passwords in plaintext -->
+    <exclude domain="file" path="datastore/bookmarks.preferences" />
+    <!-- Chat history -->
+    <exclude domain="file" path="messages" />
+</full-backup-content>

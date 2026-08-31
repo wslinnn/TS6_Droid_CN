@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cloud backup and device-transfer rules for API 31+ -->
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- TeamSpeak identity (the account's private key) -->
+        <exclude domain="file" path="identity.ini" />
+        <!-- Saved bookmarks, which contain server passwords in plaintext -->
+        <exclude domain="file" path="datastore/bookmarks.preferences" />
+        <!-- Chat history -->
+        <exclude domain="file" path="messages" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="identity.ini" />
+        <exclude domain="file" path="datastore/bookmarks.preferences" />
+        <exclude domain="file" path="messages" />
+    </device-transfer>
+</data-extraction-rules>
