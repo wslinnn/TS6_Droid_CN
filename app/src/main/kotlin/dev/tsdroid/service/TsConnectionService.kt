@@ -74,6 +74,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateRegistryOwner {
 
@@ -139,6 +140,14 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
     private var latestStartId = 0
     @Volatile private var isStopping = false
     @Volatile private var restartRequestedWhileStopping = false
+
+    /** True while the service is disconnecting and about to stop itself. */
+    val isShuttingDown: Boolean get() = isStopping
+
+    // Parameters of the last connect() call, used by reconnect()
+    private var lastConnectAddress: String? = null
+    private var lastConnectNickname: String? = null
+    private var lastConnectPassword: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -426,6 +435,9 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         }
 
         isIntentionalDisconnect = false
+        lastConnectAddress = address
+        lastConnectNickname = nickname
+        lastConnectPassword = password
         return try {
             tsClient.connect(address, identity, nickname, password)
             audioBridge.startCapture(
@@ -452,6 +464,26 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
 
     fun disconnect() {
         disconnectAndStop()
+    }
+
+    /**
+     * Reconnect using the parameters of the last connect() call, reloading
+     * the persisted identity from disk. Returns null on success.
+     */
+    suspend fun reconnect(): Throwable? {
+        val address = lastConnectAddress ?: return null
+        val nickname = lastConnectNickname ?: return null
+        val identityFile = File(applicationContext.filesDir, "identity.ini")
+        val identity = try {
+            Identity.load(identityFile.absolutePath)
+        } catch (e: Throwable) {
+            return e
+        }
+        return try {
+            connect(address, identity, nickname, lastConnectPassword)
+        } finally {
+            identity.close()
+        }
     }
 
     private fun disconnectAndStop() {

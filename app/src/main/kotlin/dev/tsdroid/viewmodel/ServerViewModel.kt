@@ -74,6 +74,8 @@ sealed class DownloadState {
 class ServerViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private const val TAG = "ServerViewModel"
+        private const val AUTO_RECONNECT_ATTEMPTS = 5
+        private const val AUTO_RECONNECT_BASE_DELAY_MS = 2000L
     }
 
     private val messageStore = MessageStore(application)
@@ -144,6 +146,16 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _connectionState = MutableStateFlow(ConnectionState.CONNECTED)
     val connectionState: StateFlow<Int> = _connectionState.asStateFlow()
+
+    // Set once the session is truly over (manual disconnect or auto-reconnect
+    // exhausted); the UI navigates away on it instead of on every disconnect
+    private val _sessionClosed = MutableStateFlow(false)
+    val sessionClosed: StateFlow<Boolean> = _sessionClosed.asStateFlow()
+
+    private var reconnectJob: Job? = null
+
+    val autoReconnect: StateFlow<Boolean> = bookmarkStore.autoReconnect
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // Unread message counters
     private val _unreadChannel = MutableStateFlow(0)
@@ -296,7 +308,10 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             viewModelScope.launch {
-                service.tsClient.state.collect { _connectionState.value = it }
+                service.tsClient.state.collect { state ->
+                    _connectionState.value = state
+                    if (state == ConnectionState.DISCONNECTED) tryAutoReconnect(service)
+                }
             }
             viewModelScope.launch {
                 service.tsClient.events.collect { handleEvent(it) }
@@ -1012,7 +1027,38 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * Auto-reconnect after an unexpected disconnect with linear backoff.
+     * While retrying, the session stays alive for the UI; only a manual
+     * disconnect or exhausted attempts close it.
+     */
+    private fun tryAutoReconnect(service: TsConnectionService) {
+        if (reconnectJob?.isActive == true) return
+        if (service.isShuttingDown || !autoReconnect.value) {
+            _sessionClosed.value = true
+            return
+        }
+        reconnectJob = viewModelScope.launch {
+            Log.i(TAG, "Connection lost; auto reconnect enabled")
+            var lastFailure: Throwable? = null
+            for (attempt in 1..AUTO_RECONNECT_ATTEMPTS) {
+                delay(AUTO_RECONNECT_BASE_DELAY_MS * attempt)
+                if (service.isShuttingDown || _connectionState.value != ConnectionState.DISCONNECTED) return@launch
+                Log.i(TAG, "Auto reconnect attempt $attempt/$AUTO_RECONNECT_ATTEMPTS")
+                lastFailure = service.reconnect()
+                if (lastFailure == null) return@launch
+                Log.w(TAG, "Auto reconnect attempt $attempt failed", lastFailure)
+            }
+            Log.w(TAG, "Auto reconnect gave up; closing session")
+            _sessionClosed.value = true
+            service.disconnect()
+        }
+    }
+
     fun disconnect() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+        _sessionClosed.value = true
         saveNow()
         queriedPermChannels.clear()
         connectionService?.disconnect()

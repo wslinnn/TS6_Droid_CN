@@ -169,13 +169,15 @@ fun ServerScreen(
         onDispose {}
     }
 
-    // Navigate away on disconnect — one-shot via LaunchedEffect
-    LaunchedEffect(connectionState) {
-        if (connectionState == ConnectionState.DISCONNECTED) {
+    // Navigate away only when the session is truly closed; while auto
+    // reconnect is retrying, stay on the server screen.
+    val sessionClosed by viewModel.sessionClosed.collectAsStateWithLifecycle()
+    LaunchedEffect(sessionClosed) {
+        if (sessionClosed) {
             onDisconnected()
         }
     }
-    if (connectionState == ConnectionState.DISCONNECTED) return
+    if (sessionClosed) return
 
     // Show floating window when entering ServerScreen if enabled
     LaunchedEffect(enableFloatingWindow) {
@@ -367,6 +369,22 @@ fun ServerScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
+            if (connectionState == ConnectionState.DISCONNECTED) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 8.dp)
+                        .clip(RoundedCornerShape(999.dp)),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                ) {
+                    Text(
+                        text = stringResource(R.string.connecting),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            }
             // Channel tree — full screen
             ChannelTree(
                 channels = channels,
