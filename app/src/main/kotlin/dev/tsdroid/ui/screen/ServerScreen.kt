@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
@@ -177,6 +178,14 @@ fun ServerScreen(
         viewModel.setChatState(chatOpen, chatTab, pmTargetId)
     }
 
+    // System back closes the top-most overlay instead of leaving the app
+    BackHandler(enabled = chatOpen || fileManagerOpen) {
+        when {
+            chatOpen -> chatOpen = false
+            fileManagerOpen -> viewModel.toggleFileManager()
+        }
+    }
+
     DisposableEffect(Unit) {
         viewModel.bindToService()
         onDispose {}
@@ -235,7 +244,12 @@ fun ServerScreen(
                     scrolledContainerColor = Color.Transparent,
                 ),
                 actions = {
-                    IconButton(onClick = { viewModel.toggleFileManager() }) {
+                    IconButton(onClick = {
+                        val opening = !fileManagerOpen
+                        viewModel.toggleFileManager()
+                        // Full-screen panels overlap — keep them exclusive
+                        if (opening) chatOpen = false
+                    }) {
                         Icon(Icons.Default.Folder, contentDescription = stringResource(R.string.file_manager))
                     }
                     IconButton(onClick = { viewModel.disconnect() }) {
@@ -259,7 +273,9 @@ fun ServerScreen(
                     // Chat FAB with badge
                     Box {
                         IconButton(onClick = {
+                            val opening = !chatOpen
                             chatOpen = !chatOpen
+                            if (opening && fileManagerOpen) viewModel.toggleFileManager()
                         }) {
                             Icon(
                                 Icons.Default.ChatBubble,
@@ -419,15 +435,21 @@ fun ServerScreen(
                 users = users,
                 onChannelClick = { channelId -> viewModel.moveToChannel(channelId) },
                 onUserClick = { user ->
-                    pmTargetId = user.id
-                    chatTab = 1
-                    chatOpen = true
+                    // No PM to yourself — the click is a no-op on the own row
+                    if (user.id != viewModel.myClientId) {
+                        pmTargetId = user.id
+                        chatTab = 1
+                        chatOpen = true
+                    }
                 },
                 onUserLongClick = { user -> viewModel.toggleMuteUser(user.id) },
-                onWhisperClick = { userId -> viewModel.toggleWhisper(userId) },
+                onWhisperClick = { userId ->
+                    if (userId != viewModel.myClientId) viewModel.toggleWhisper(userId)
+                },
                 mutedUserIds = mutedUserIds,
                 channelIcons = channelIcons,
                 userAvatars = userAvatars,
+                selfId = viewModel.myClientId,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 8.dp),
@@ -449,7 +471,7 @@ fun ServerScreen(
                         currentPath = currentFilePath,
                         files = fileList,
                         isLoading = fileManagerLoading,
-                        users = users,
+                        users = users.filter { it.id != viewModel.myClientId },
                         permissionHints = channelPermissions,
                         onNavigateToFolder = { viewModel.navigateToFolder(it) },
                         onNavigateUp = { viewModel.navigateUp() },

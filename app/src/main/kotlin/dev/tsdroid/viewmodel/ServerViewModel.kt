@@ -711,6 +711,10 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         WhisperManager.toggleWhisper(userId)
     }
 
+    /** Local user id, or null before the connection is established. */
+    val myClientId: Int?
+        get() = tsClient?.clientId
+
     fun sendWhisperMessage(text: String) {
         WhisperManager.sendWhisperMessage(text)
     }

@@ -49,6 +49,7 @@ fun ChannelTree(
     channelIcons: Map<Long, ImageBitmap> = emptyMap(),
     userAvatars: Map<String, ImageBitmap> = emptyMap(),
     onWhisperClick: ((Int) -> Unit)? = null,
+    selfId: Int? = null,
     modifier: Modifier = Modifier,
 ) {
     // Filter nulls early — JNI arrays can contain null elements
@@ -86,6 +87,7 @@ fun ChannelTree(
                     onToggleMute = onUserLongClick?.let { { it(item.user) } },
                     isLocallyMuted = item.user.id in mutedUserIds,
                     onWhisperClick = onWhisperClick,
+                    isSelf = item.user.id == selfId,
                 )
             }
         }

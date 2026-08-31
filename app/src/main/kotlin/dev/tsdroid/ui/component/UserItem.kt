@@ -59,6 +59,7 @@ fun UserItem(
     onToggleMute: (() -> Unit)? = null,
     onWhisperClick: ((Int) -> Unit)? = null,
     isLocallyMuted: Boolean = false,
+    isSelf: Boolean = false,
 ) {
     Box(modifier = modifier) {
         Row(
@@ -111,7 +112,9 @@ fun UserItem(
             }
             
             // Inline mute toggle button instead of long press menu
-            if (onToggleMute != null) {
+            // (hidden on the local user's own row — muting/whispering to
+            // yourself is meaningless)
+            if (onToggleMute != null && !isSelf) {
                 IconButton(
                     onClick = onToggleMute,
                     modifier = Modifier.size(24.dp)
@@ -132,7 +135,7 @@ fun UserItem(
                 )
                 Spacer(Modifier.width(2.dp))
             }
-            if (onWhisperClick != null) {
+            if (onWhisperClick != null && !isSelf) {
                 IconButton(
                     onClick = { onWhisperClick(user.id) },
                     modifier = Modifier.size(24.dp)
