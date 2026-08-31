@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -389,6 +390,10 @@ fun ServerScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                // The panel already sits above the bottom bar via this padding;
+                // consume it so the chat input's ime inset doesn't stack the
+                // bottom-bar height on top of the keyboard
+                .consumeWindowInsets(padding)
                 .padding(padding),
         ) {
             if (connectionState == ConnectionState.DISCONNECTED) {
