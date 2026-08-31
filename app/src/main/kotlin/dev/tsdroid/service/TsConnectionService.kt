@@ -58,7 +58,6 @@ import dev.tsdroid.TsDroidApp
 import dev.tsdroid.bridge.AudioBridge
 import dev.tsdroid.bridge.AvatarCache
 import dev.tsdroid.bridge.TsClient
-import dev.tsdroid.bridge.WhisperBridge
 import dev.tsdroid.data.SettingsStore
 import dev.tslib.Identity
 import dev.tslib.Channel
@@ -388,7 +387,6 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
             tsClient.startEventLoop()
             // Initialize whisper manager
             WhisperManager.init(tsClient)
-            WhisperBridge.tryLoad()
             null
         } catch (e: Throwable) {
             if (e is kotlinx.coroutines.CancellationException) throw e
