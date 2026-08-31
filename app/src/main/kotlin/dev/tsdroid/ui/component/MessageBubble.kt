@@ -203,6 +203,9 @@ private fun FileAttachmentCard(
     val context = LocalContext.current
     var downloadStateFlow by remember { mutableStateOf<StateFlow<DownloadState>?>(null) }
     val downloadState = downloadStateFlow?.collectAsStateWithLifecycle()?.value ?: DownloadState.Idle
+    // Only the bubble that started the download may auto-open the file;
+    // other bubbles showing the same attachment share the state flow
+    var initiatedHere by remember { mutableStateOf(false) }
 
     // Auto-load images (served from disk cache if available)
     LaunchedEffect(attachment, autoLoadImages) {
@@ -213,7 +216,7 @@ private fun FileAttachmentCard(
 
     // Auto-open non-image files after download completes
     LaunchedEffect(downloadState) {
-        if (downloadState is DownloadState.Done && !attachment.isImage && downloadState.fileUri != null) {
+        if (initiatedHere && downloadState is DownloadState.Done && !attachment.isImage && downloadState.fileUri != null) {
             openFile(context, downloadState.fileUri, attachment.fileName)
         }
     }
@@ -244,7 +247,10 @@ private fun FileAttachmentCard(
             .then(
                 when {
                     onDownload != null && downloadState is DownloadState.Idle ->
-                        Modifier.clickable { downloadStateFlow = onDownload(attachment) }
+                        Modifier.clickable {
+                            initiatedHere = true
+                            downloadStateFlow = onDownload(attachment)
+                        }
                     downloadState is DownloadState.Done && downloadState.fileUri != null -> {
                         val uri = downloadState.fileUri
                         Modifier.clickable { openFile(context, uri, attachment.fileName) }
