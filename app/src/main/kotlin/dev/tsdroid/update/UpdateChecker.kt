@@ -95,8 +95,11 @@ object UpdateChecker {
 
     // internal so the unit tests can exercise the comparison directly
     internal fun isNewerVersion(current: String, latest: String): Boolean {
-        val currentClean = current.removeSuffix("-Han")
-        val latestClean = latest.removeSuffix("-Han")
+        // Our release tags look like "v2.2.1-Han"; without stripping the "v"
+        // the first segment "v2" fails toIntOrNull and shifts every later
+        // segment left, so patch releases would never be detected as newer
+        val currentClean = current.removePrefix("v").removeSuffix("-Han")
+        val latestClean = latest.removePrefix("v").removeSuffix("-Han")
 
         val currentParts = currentClean.split(".").mapNotNull { it.toIntOrNull() }
         val latestParts = latestClean.split(".").mapNotNull { it.toIntOrNull() }

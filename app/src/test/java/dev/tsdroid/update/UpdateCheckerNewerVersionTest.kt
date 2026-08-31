@@ -37,4 +37,13 @@ class UpdateCheckerNewerVersionTest {
         assertTrue(UpdateChecker.isNewerVersion("2.1.4-beta", "2.1.5"))
         assertFalse(UpdateChecker.isNewerVersion("2.1.4", "2.1.4-rc1"))
     }
+
+    @Test
+    fun `v prefixed tags are compared numerically`() {
+        assertTrue(UpdateChecker.isNewerVersion("2.2.0", "v2.2.1"))
+        assertTrue(UpdateChecker.isNewerVersion("2.2.0", "v2.2.1-Han"))
+        assertFalse(UpdateChecker.isNewerVersion("2.2.0", "v2.2.0-Han"))
+        assertTrue(UpdateChecker.isNewerVersion("2.2.0", "v3.0.0"))
+        assertTrue(UpdateChecker.isNewerVersion("v2.2.0", "v2.2.1"))
+    }
 }
