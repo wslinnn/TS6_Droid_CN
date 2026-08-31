@@ -721,6 +721,23 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         return _rawUsers.value.find { it.id == myId }?.channelId ?: 0
     }
 
+    /** Build a ts3file:// link with URL-encoded parameters so names with
+     *  spaces, '&', '=' or CJK survive Uri.getQueryParameter on the receiver. */
+    private fun buildTs3FileUrl(
+        host: String,
+        port: String,
+        channelId: Long,
+        path: String,
+        fileName: String,
+        size: Long,
+        fileDateTime: Long? = null,
+    ): String {
+        fun enc(raw: String): String = java.net.URLEncoder.encode(raw, "UTF-8")
+        return "ts3file://${enc(host)}?port=${enc(port)}&channel=$channelId" +
+            "&path=${enc(path)}&filename=${enc(fileName)}&isDir=0&size=$size" +
+            (fileDateTime?.let { "&fileDateTime=$it" } ?: "")
+    }
+
     fun uploadAndSendFile(fileName: String, data: ByteArray, isPrivate: Boolean, targetId: Int?) {
         val client = tsClient ?: return
         val channelId = currentChannelId()
@@ -733,8 +750,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 val host = addr.substringBefore(':')
                 val port = addr.substringAfter(':', "9987")
                 val fileDateTime = System.currentTimeMillis() / 1000
-                val ts3Url = "ts3file://${host}?port=${port}&channel=${channelId}" +
-                    "&path=/&filename=${fileName}&isDir=0&size=${data.size}&fileDateTime=${fileDateTime}"
+                val ts3Url = buildTs3FileUrl(host, port, channelId, "/", fileName, data.size.toLong(), fileDateTime)
 
                 val ext = fileName.substringAfterLast('.', "").lowercase()
                 val isImage = ext in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
@@ -929,8 +945,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         val host = addr.substringBefore(':')
         val port = addr.substringAfter(':', "9987")
         val currentPath = _currentFilePath.value
-        val ts3Url = "ts3file://${host}?port=${port}&channel=${channelId}" +
-            "&path=${currentPath}&filename=${fileName}&isDir=0&size=${fileSize}"
+        val ts3Url = buildTs3FileUrl(host, port, channelId, currentPath, fileName, fileSize)
         val ext = fileName.substringAfterLast('.', "").lowercase()
         val isImage = ext in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
         val attachment = FileAttachment(fileName, fileSize, fileId = "", isImage, channelId = channelId)
