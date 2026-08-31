@@ -1,8 +1,10 @@
 package dev.tsdroid
 
 import android.os.Bundle
+import android.os.Build
 import android.content.Context
 import android.util.Log
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -43,6 +45,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Edge-to-edge: on API 30+ adjustResize is a no-op and the system may
+        // fall back to panning the whole window when the focused view is
+        // covered. Pin NOTHING so the IME is handled purely via insets (the
+        // chat input row consumes them). API 29 keeps the manifest
+        // adjustResize — window resize is the only IME mechanism below 30.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+        }
         setContent {
             var showSplash by remember { mutableStateOf(true) }
             val seedColor = AnimeWallpaperState.dominantColor.value
