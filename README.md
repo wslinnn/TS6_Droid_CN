@@ -1,6 +1,8 @@
-# TS6 Droid 简中版
+# TS6 Mobile（原 TS6 Droid 简中版）
 
-基于原作者 [flamme-demon/TS6_Droid](https://github.com/flamme-demon/TS6_Droid) 的开源项目进行汉化与功能增强的 Android 客户端。
+基于原作者 [flamme-demon/TS6_Droid](https://github.com/flamme-demon/TS6_Droid) 的开源项目、经 [YUAXI/TS6_Droid_CN](https://github.com/YUAXI/TS6_Droid_CN) 简中汉化增强后，由本仓库延续维护的 Android 客户端。
+
+**仓库定位（Fork 源流）**：[flamme-demon/TS6_Droid](https://github.com/flamme-demon/TS6_Droid)（原版）→ [YUAXI/TS6_Droid_CN](https://github.com/YUAXI/TS6_Droid_CN)（简中汉化增强版）→ **本仓库**（延续维护：60+ 项修复、交互重设计、多语言补齐）。应用内更新与 Release 均由本仓库发布。
 
 这是一个自由、轻量级的 TeamSpeak 3/6 安卓客户端，使用 Jetpack Compose 构建，底层由 Rust 编写的 `tslib` 驱动。
 
@@ -24,6 +26,23 @@
 ---
 
 ## 更新日志
+
+### v2.2.0-Han（2026-08-31）
+
+**交互重设计**
+- **悬浮窗权限引导**：首页连接时弹应用内说明框，可选「直接连接」（记住选择）或「去开启权限」，授权返回自动续连；服务器表单改为纯保存，连接只由首页卡片发起
+- **麦克风控制统一**：底部大按钮与悬浮窗/通知栏共用同一真实静音状态；PTT/语音激活模式独立到设置页并可持久化；PTT 松开恢复按住前状态
+- **悬浮窗面板**：红色按钮改为真正断开连接（结束会话并停止服务）
+
+**问题修复（60+ 项）**
+- 权限、音频、聊天、文件管理、悬浮窗等模块全量修复（P0-P3，详见提交历史）
+- 聊天键盘遮挡修复：输入框贴合键盘上沿，头部不再被顶起
+- 系统返回键优先关闭聊天/文件面板，不再直接退出应用
+- 附件下载失败可重试；上传超 10MB 弹提示；消息内嵌图片受「自动加载图片」开关控制
+- 头像下载、文件上传等 I/O 移出主线程；悬浮窗退出按钮语义修正
+
+**多语言**
+- 补齐英文缺失的 38 个翻译键值，修正悬浮窗/密聊/文件管理器的硬编码多语言文本
 
 ### v2.1.4-Han（2026-08-18）
 
@@ -215,6 +234,6 @@ keytool -genkey -v -keystore release.keystore -alias ts6droid -keyalg RSA -keysi
 
 感谢所有为本项目做出贡献的开发者！
 
-<a href="https://github.com/YUAXI/TS6_Droid_CN/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=YUAXI/TS6_Droid_CN&v=20260729" />
+<a href="https://github.com/wslinnn/TS6_Droid_CN/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=wslinnn/TS6_Droid_CN" />
 </a>
