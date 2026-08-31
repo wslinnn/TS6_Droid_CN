@@ -112,6 +112,7 @@
     <string name="tap_to_download">点击下载</string>
     <string name="tap_to_view">点击查看</string>
     <string name="tap_to_load_images">点击加载图片</string>
+    <string name="retry">重试</string>
     <string name="tap_to_open">点击打开</string>
     <string name="downloading">下载中…</string>
     <string name="download">下载</string>

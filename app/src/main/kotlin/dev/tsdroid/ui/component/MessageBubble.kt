@@ -303,6 +303,13 @@ private fun FileAttachmentCard(
                             initiatedHere = true
                             downloadStateFlow = onDownload(attachment)
                         }
+                    // A failed download keeps its retry entry point: the VM cache
+                    // replaces non-Done states with a fresh download on re-request
+                    onDownload != null && downloadState is DownloadState.Error ->
+                        Modifier.clickable {
+                            initiatedHere = true
+                            downloadStateFlow = onDownload(attachment)
+                        }
                     downloadState is DownloadState.Done && downloadState.fileUri != null -> {
                         val uri = downloadState.fileUri
                         Modifier.clickable { openFile(context, uri, attachment.fileName) }
@@ -374,10 +381,12 @@ private fun FileAttachmentCard(
                 }
             }
         }
-        if (onDownload != null && downloadState is DownloadState.Idle) {
+        if (onDownload != null && (downloadState is DownloadState.Idle || downloadState is DownloadState.Error)) {
             Icon(
                 imageVector = if (attachment.isImage) Icons.Default.Image else Icons.Default.Download,
-                contentDescription = stringResource(R.string.download),
+                contentDescription = stringResource(
+                    if (downloadState is DownloadState.Error) R.string.retry else R.string.download
+                ),
                 modifier = Modifier.size(24.dp),
                 tint = MaterialTheme.colorScheme.primary,
             )
