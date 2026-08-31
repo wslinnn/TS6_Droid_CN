@@ -441,8 +441,7 @@ fun ServerScreen(
                 selfId = viewModel.myClientId,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f), MaterialTheme.shapes.large),
+                    .padding(horizontal = 8.dp),
             )
 
             // File manager — slides up from bottom, fills content area
@@ -693,7 +692,7 @@ fun ChatPanel(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
-                        .padding(vertical = 4.dp),
+                        .padding(top = 8.dp, bottom = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     // "All" chip
