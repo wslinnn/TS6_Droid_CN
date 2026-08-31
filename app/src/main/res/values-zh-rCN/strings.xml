@@ -180,4 +180,5 @@
     <string name="about_contributors_title">贡献者</string>
     <string name="about_contributions_count">%1$d 次贡献</string>
     <string name="contributors_load_error">加载失败</string>
+    <string name="accessibility_service_desc">TeamSpeak 6 全局语音控制</string>
 </resources>

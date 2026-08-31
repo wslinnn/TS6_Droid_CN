@@ -140,4 +140,44 @@
     <string name="about_contributors_title">Contributors</string>
     <string name="about_contributions_count">%1$d contributions</string>
     <string name="contributors_load_error">Failed to load</string>
+
+    <!-- Supplementary translations: keys that previously fell back to the French default -->
+    <string name="app_name">TS6 Droid</string>
+    <string name="channel_connection">Connection</string>
+    <string name="accessibility_service_desc">TeamSpeak 6 global voice controller</string>
+    <string name="server_address_placeholder">localhost:9987</string>
+    <string name="edit_bookmark">Edit bookmark</string>
+    <string name="save">Save</string>
+    <string name="no_bookmarks">No bookmarks</string>
+    <string name="manual_connection">Manual connection</string>
+    <string name="auto_reconnect">Auto reconnect</string>
+    <string name="edit">Edit</string>
+    <string name="show_link_thumbnails">Video link thumbnails</string>
+    <string name="enable_floating_window">Floating window</string>
+    <string name="chat">Chat</string>
+    <string name="ptt">PTT</string>
+    <string name="mute">Mute</string>
+    <string name="user_fallback">User #%1$d</string>
+    <string name="image">Image</string>
+    <string name="file_attachment_server">%1$s \u00B7 Server file</string>
+    <string name="downloading">Downloading\u2026</string>
+    <string name="download">Download</string>
+    <string name="file_saved_label">Saved to Downloads</string>
+    <string name="file_saved">%1$s saved</string>
+    <string name="attach_file">Attach file</string>
+    <string name="file_manager">Files</string>
+    <string name="no_files">No files</string>
+    <string name="new_folder">New folder</string>
+    <string name="rename">Rename</string>
+    <string name="delete_file">Delete</string>
+    <string name="confirm_delete">Delete %1$s?</string>
+    <string name="enter_folder_name">Folder name</string>
+    <string name="enter_new_name">New name</string>
+    <string name="refresh">Refresh</string>
+    <string name="create">Create</string>
+    <string name="folder">Folder</string>
+    <string name="upload">Upload</string>
+    <string name="share_in_channel">Current channel</string>
+    <string name="share_file_title">Share %1$s</string>
+    <string name="notif_mute">Mute</string>
 </resources>
