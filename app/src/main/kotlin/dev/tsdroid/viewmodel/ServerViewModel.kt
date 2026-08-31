@@ -76,6 +76,40 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         private const val TAG = "ServerViewModel"
         private const val AUTO_RECONNECT_ATTEMPTS = 5
         private const val AUTO_RECONNECT_BASE_DELAY_MS = 2000L
+        private const val PENDING_ECHO_WINDOW_MS = 5000L
+    }
+
+    /**
+     * Own messages are echoed locally before the server confirms them; a
+     * command error right after a send most likely means the message was
+     * rejected (no talk power etc.), so the pending echo is rolled back.
+     */
+    private class PendingEcho(val target: String, val userId: Int?, val text: String, val at: Long)
+    private val pendingOwnEchoes = ArrayDeque<PendingEcho>()
+
+    private fun rollbackLastPendingEcho() {
+        val now = System.currentTimeMillis()
+        while (pendingOwnEchoes.isNotEmpty() && now - pendingOwnEchoes.first().at > PENDING_ECHO_WINDOW_MS) {
+            pendingOwnEchoes.removeFirst()
+        }
+        val pending = pendingOwnEchoes.removeFirstOrNull() ?: return
+        if (pending.target == "channel") {
+            val list = _channelMessages.value.toMutableList()
+            val idx = list.indexOfFirst { it.isMe && it.text == pending.text && it.timestamp >= pending.at }
+            if (idx >= 0) {
+                list.removeAt(idx)
+                _channelMessages.value = list
+            }
+        } else {
+            val userId = pending.userId ?: return
+            val existing = _privateMessages.value[userId] ?: return
+            val list = existing.toMutableList()
+            val idx = list.indexOfFirst { it.isMe && it.text == pending.text && it.timestamp >= pending.at }
+            if (idx >= 0) {
+                list.removeAt(idx)
+                _privateMessages.value = _privateMessages.value.toMutableMap().apply { put(userId, list) }
+            }
+        }
     }
 
     private val messageStore = MessageStore(application)
@@ -326,6 +360,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                     withContext(Dispatchers.Main) {
                         Toast.makeText(getApplication(), message, Toast.LENGTH_SHORT).show()
                     }
+                    rollbackLastPendingEcho()
                 }
             }
             // Load persisted messages
@@ -633,6 +668,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         _channelMessages.value = _channelMessages.value + ChatMessage(
             sender = getApplication<Application>().getString(R.string.me_sender), text = text, isMe = true,
         )
+        pendingOwnEchoes.addLast(PendingEcho("channel", null, text, System.currentTimeMillis()))
         scheduleSave()
     }
 
@@ -645,6 +681,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         val current = _privateMessages.value.toMutableMap()
         current[userId] = (current[userId] ?: emptyList()) + msg
         _privateMessages.value = current
+        pendingOwnEchoes.addLast(PendingEcho("private", userId, text, System.currentTimeMillis()))
         scheduleSave()
     }
 
