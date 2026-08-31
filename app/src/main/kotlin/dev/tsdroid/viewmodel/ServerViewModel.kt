@@ -249,13 +249,20 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         // Combine raw users + talking set to produce patched user list
         viewModelScope.launch {
             combine(_rawUsers, _talkingUserIds, _isLocalTalking) { users, talking, localTalking ->
+                // A talk_status_stop event can get dropped (event buffer
+                // overflow); prune ids that are no longer in the user list so
+                // nobody is stuck showing as talking forever
+                val liveIds = users.map { it.id }.toSet()
+                val pruned = talking.intersect(liveIds)
+                if (pruned.size != talking.size) _talkingUserIds.value = pruned
+
                 val myId = tsClient?.clientId
-                
+
                 users.map { user ->
                     val isLocallyTalking = (user.id == myId && localTalking)
-                    val isRemoteTalking = user.id in talking
+                    val isRemoteTalking = user.id in pruned
                     val shouldBeTalking = isLocallyTalking || isRemoteTalking
-                    
+
                     if (shouldBeTalking && !user.isTalking) user.withTalking(true)
                     else if (!shouldBeTalking && user.isTalking) user.withTalking(false)
                     else user
