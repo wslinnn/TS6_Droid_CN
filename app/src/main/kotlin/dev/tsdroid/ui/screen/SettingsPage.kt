@@ -333,10 +333,13 @@ fun SettingsPage(
             context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
         } catch (_: Exception) { "" }
         Text(
-            text = "TS6 Droid v$versionName",
+            text = "TS6 Mobile v$versionName",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f), MaterialTheme.shapes.large)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
         )
     }
 }

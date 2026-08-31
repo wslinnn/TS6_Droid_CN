@@ -11,14 +11,14 @@ class FileCache(private val context: Context) {
 
     companion object {
         private const val TAG = "FileCache"
-        private const val BASE_FOLDER = "TS6 Droid"
+        private const val BASE_FOLDER = "TS6 Mobile"
     }
 
     private val contentResolver = context.contentResolver
 
     /**
      * Retourne le fichier depuis le cache local, ou null s'il n'existe pas.
-     * Cherche dans Documents/TS6 Droid/{serverHost}/{relativePath}
+     * Cherche dans Documents/TS6 Mobile/{serverHost}/{relativePath}
      */
     fun get(serverHost: String, relativePath: String): ByteArray? {
         val uri = findFileUri(serverHost, relativePath) ?: return null
@@ -31,7 +31,7 @@ class FileCache(private val context: Context) {
     }
 
     /**
-     * Enregistre les bytes dans Documents/TS6 Droid/{serverHost}/{relativePath}.
+     * Enregistre les bytes dans Documents/TS6 Mobile/{serverHost}/{relativePath}.
      * Crée le fichier via MediaStore. Écrase si existe déjà.
      */
     fun put(serverHost: String, relativePath: String, data: ByteArray) {
