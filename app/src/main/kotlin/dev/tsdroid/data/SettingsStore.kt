@@ -27,8 +27,10 @@ class SettingsStore(private val context: Context) {
     val showLinkThumbnails: Flow<Boolean> = context.settingsDataStore.data
         .map { it[KEY_SHOW_LINK_THUMBNAILS] ?: false }
 
+    // Default off: auto-fetching remote images from chat links leaks the
+    // user's IP to arbitrary servers; users can opt in
     val autoLoadImages: Flow<Boolean> = context.settingsDataStore.data
-        .map { it[KEY_AUTO_LOAD_IMAGES] ?: true }
+        .map { it[KEY_AUTO_LOAD_IMAGES] ?: false }
 
     val language: Flow<String> = context.settingsDataStore.data
         .map { it[KEY_LANGUAGE] ?: "zh" }
