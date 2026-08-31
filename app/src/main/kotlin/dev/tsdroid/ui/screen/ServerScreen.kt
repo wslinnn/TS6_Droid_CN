@@ -549,9 +549,12 @@ fun ChatPanel(
         try {
             val cursor = context.contentResolver.query(uri, null, null, null, null)
             val nameIndex = cursor?.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME) ?: -1
+            val sizeIndex = cursor?.getColumnIndex(android.provider.OpenableColumns.SIZE) ?: -1
             cursor?.moveToFirst()
             val fileName = if (nameIndex >= 0) cursor?.getString(nameIndex) ?: "file" else "file"
+            val fileSize = if (sizeIndex >= 0) cursor?.getLong(sizeIndex) ?: -1L else -1L
             cursor?.close()
+            if (fileSize > 10_485_760) return@rememberLauncherForActivityResult // 10MB max
             val data = context.contentResolver.openInputStream(uri)?.readBytes() ?: return@rememberLauncherForActivityResult
             if (data.size > 10_485_760) return@rememberLauncherForActivityResult // 10MB max
             onUploadFile(fileName, data)
