@@ -27,6 +27,15 @@
 
 ## 更新日志
 
+### v2.2.1-Han（2026-09-01）
+
+**发布工程**
+- 正式发布通道上线：GitHub Actions 使用仓库 Secrets 中的证书签名构建正式包并自动创建 Release；应用内「检查更新 → 下载 → 安装」链路打通，此后更新可覆盖安装、不再需要卸载重装
+- 构建脚本签名参数改为环境变量注入，移除构建脚本与文档中的明文密码
+- 发版 tag 强制校验与应用版本号一致，避免检查更新误判版本
+
+（本版同时包含 v2.2.0-Han 之后的代码修复：检查更新支持 `v` 前缀版本号、被服务器拒绝的消息不再误删、壁纸解码异常防护、频道列表全透明与聊天标签间距优化——详见提交历史）
+
 ### v2.2.0-Han（2026-08-31）
 
 **品牌与包名迁移说明**
@@ -188,22 +197,31 @@
 
 ---
 
-## 多电脑编译签名说明
+## 签名与发布
 
-本项目使用统一的 `release.keystore` 签名文件，确保所有电脑编译的 APK 签名一致，覆盖安装时不报签名冲突。
+正式发布由 GitHub Actions 完成：推送 `vX.Y.Z-Han` 格式的 tag，[android-release.yml](.github/workflows/android-release.yml) 会自动运行单元测试、用仓库 Secrets 中的证书签名构建 Release APK，并创建正式 GitHub Release——应用内「检查更新」读取的就是该 Release。
 
-- 签名文件位于项目根目录 `release.keystore`
-- 密码/别名：`ts6droid`
-- 该文件已被 `.gitignore` 排除，不会提交到 GitHub
-- 多电脑协作时，将 `release.keystore` 复制到其他电脑的项目根目录即可
+- **证书不进仓库**：以 Base64 存于仓库 Secrets（`SIGNING_KEYSTORE_BASE64` + 密码/别名 Secret），工作流构建时临时解码、用完即删
+- 构建脚本从环境变量读取签名参数（`SIGNING_KEYSTORE_FILE` / `SIGNING_STORE_PASSWORD` / `SIGNING_KEY_ALIAS` / `SIGNING_KEY_PASSWORD`），未提供时回退 debug 签名，本地开发不受影响
+- **证书即更新身份**：正式包发布后切勿更换或丢失证书——换证书会导致所有用户必须卸载重装，丢失则永远无法再推覆盖更新。请离线加密备份并妥善保存密码
+- 普通推送仍走 [Android CI](.github/workflows/android-build.yml)（单元测试 + debug 产物），仅作开发自测
 
-### 生成新的签名文件
+### 发布一个新版本
 
-如需替换签名（例如用于正式发布），在项目根目录执行：
+1. 在 `app/build.gradle.kts` 中提升 `versionName`（必须与 tag 严格一致，如 tag `v2.2.1-Han` 对应 `2.2.1-Han`）和 `versionCode`（必须比上一版大），提交并推送
+2. 打 tag 并推送：`git tag v2.2.1-Han && git push origin v2.2.1-Han`
+3. Actions 自动构建并创建 Release；在 Actions 日志中核对 `apksigner` 打印的证书 SHA-256 指纹
+4. 事后可在 Release 页面编辑补充中文更新日志
+
+### 生成新的签名文件（仅首次）
+
+在项目根目录执行：
 
 ```bash
-keytool -genkey -v -keystore release.keystore -alias ts6droid -keyalg RSA -keysize 2048 -validity 10000
+keytool -genkeypair -v -keystore release.keystore -storetype PKCS12 -alias ts6mobile -keyalg RSA -keysize 4096 -validity 10950
 ```
+
+生成后做两份离线加密备份，密码存入密码管理器；`release.keystore` 已被 `.gitignore` 排除，不会提交到 GitHub。
 
 ---
 
