@@ -36,8 +36,17 @@ fun ChatView(
     var visibleCount by remember { mutableIntStateOf(INITIAL_PAGE) }
 
     // reverseLayout=true: index 0 = bottom (newest), high index = top (oldest)
+    // Timestamps have ms resolution, so two messages can share one — LazyColumn
+    // crashes on duplicate keys. Force strict monotonic order before rendering.
     val displayMessages = remember(messages, visibleCount) {
-        messages.takeLast(visibleCount.coerceAtMost(messages.size)).asReversed()
+        val tail = messages.takeLast(visibleCount.coerceAtMost(messages.size))
+        var lastTs = Long.MIN_VALUE
+        val deduped = tail.map { msg ->
+            val ts = if (msg.timestamp <= lastTs) lastTs + 1 else msg.timestamp
+            lastTs = ts
+            if (ts == msg.timestamp) msg else msg.copy(timestamp = ts)
+        }
+        deduped.asReversed()
     }
 
     // Auto-scroll to bottom on new messages (only if already near bottom)
