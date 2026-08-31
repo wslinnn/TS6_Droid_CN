@@ -125,10 +125,11 @@ object WhisperManager {
 
         Log.i(TAG, "Starting whisper to ${targetUser.nickname} (id=$targetUserId)")
 
-        // 1) 尝试语音密聊 — 调用 requestTalkChannel(mode=1)
-        tryVoiceWhisper(targetUserId)
+        // 语音密聊需要 Rust 层提供 requestTalkChannel 通道，当前未接线，
+        // 密聊始终以文字私信（DM）方式工作
+        isTextFallback = true
 
-        // 2) 更新状态
+        // 更新状态
         _whisperTargets.add(targetUserId)
         _whisperTargetNames.add(targetUser.nickname)
         isWhisperActive = true
@@ -144,14 +145,7 @@ object WhisperManager {
 
         Log.i(TAG, "Stopping whisper, restoring normal channel talk")
 
-        // 1) 恢复普通讲话模式
-        val client = tsClient
-        val myId = client?.clientId
-        if (myId != null) {
-            restoreNormalTalk(myId)
-        }
-
-        // 2) 重置状态
+        // 重置状态
         _whisperTargets.clear()
         _whisperTargetNames.clear()
         isWhisperActive = false
@@ -210,37 +204,6 @@ object WhisperManager {
     }
 
     // ── 内部方法 ────────────────────────────────────────────
-
-    /**
-     * 尝试通过 Rust 原生库发起语音密聊。
-     * requestTalkChannel(sendToId, mode=1) 设置语音发送目标。
-     */
-    private fun tryVoiceWhisper(targetUserId: Int) {
-        val client = tsClient ?: return
-        try {
-            // TsClient 没有直接暴露 sendTalkRequest，
-            // 但 dev.tslib.Client 有 requestTalkChannel(int, int) 方法。
-            // 通过 TsClient 的内部 client 属性无法从外部访问，
-            // 因此使用 sendPrivateMessage 作为文字降级方案。
-            //
-            // TODO: 当 Rust 层支持语音密聊时，在 TsClient 中添加
-            //       sendTalkRequest(userId, mode) 方法并在此处调用。
-            isTextFallback = true
-            Log.d(TAG, "Using text DM fallback for whisper (native voice whisper not yet wired)")
-        } catch (e: Exception) {
-            Log.w(TAG, "Voice whisper failed, fallback to text DM", e)
-            isTextFallback = true
-        }
-    }
-
-    /**
-     * 恢复普通频道讲话模式。
-     */
-    private fun restoreNormalTalk(myId: Int) {
-        // 通过发送一条私信给自己来"刷新"讲话状态
-        // 或者在 TsClient 中添加 sendTalkRequest(myId, TALK_MODE_NORMAL)
-        Log.d(TAG, "Restored normal channel talk")
-    }
 
     /**
      * 从密聊目标列表中移除一个用户。
