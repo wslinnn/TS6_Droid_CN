@@ -176,6 +176,10 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     private val _isOutputMuted = MutableStateFlow(false)
     val isOutputMuted: StateFlow<Boolean> = _isOutputMuted.asStateFlow()
 
+    /** Mirrors AudioBridge.isMuted so the home mic button follows overlay toggles. */
+    private val _isMicMuted = MutableStateFlow(true)
+    val isMicMuted: StateFlow<Boolean> = _isMicMuted.asStateFlow()
+
     // Stable placeholder so collectors before bindToService() don't get a
     // brand-new flow instance on every access
     private val _voiceInactiveFlow = MutableStateFlow(false)
@@ -418,6 +422,9 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             }
             viewModelScope.launch {
                 service.audioBridge.isOutputMuted.collect { _isOutputMuted.value = it }
+            }
+            viewModelScope.launch {
+                service.audioBridge.isMuted.collect { _isMicMuted.value = it }
             }
 
             // Start event loop (guarded by AtomicBoolean — safe if already running)

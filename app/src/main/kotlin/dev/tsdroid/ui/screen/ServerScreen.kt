@@ -122,6 +122,7 @@ fun ServerScreen(
     val privateMessages by viewModel.privateMessages.collectAsStateWithLifecycle()
     val isPttMode by viewModel.isPttMode.collectAsStateWithLifecycle()
     val isOutputMuted by viewModel.isOutputMuted.collectAsStateWithLifecycle()
+    val isMicMuted by viewModel.isMicMuted.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val unreadChannel by viewModel.unreadChannel.collectAsStateWithLifecycle()
     val unreadPrivate by viewModel.unreadPrivate.collectAsStateWithLifecycle()
@@ -341,9 +342,12 @@ fun ServerScreen(
                     // Toggle voice mode (PTT 鈫?Voice Activity)
                     IconButton(onClick = { viewModel.toggleVoiceMode() }) {
                         Icon(
-                            if (isPttMode) Icons.Default.MicOff else Icons.Default.Mic,
-                            contentDescription = stringResource(if (isPttMode) R.string.unmute_mic else R.string.mute_mic),
-                            tint = if (isPttMode) MaterialTheme.colorScheme.error
+                            // Real mute state (mirrored from AudioBridge), so a
+                            // toggle from the floating window is reflected here too;
+                            // the click itself still switches PTT/Voice-Activity
+                            if (isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                            contentDescription = stringResource(if (isMicMuted) R.string.unmute_mic else R.string.mute_mic),
+                            tint = if (isMicMuted) MaterialTheme.colorScheme.error
                             else MaterialTheme.colorScheme.primary,
                         )
                     }
