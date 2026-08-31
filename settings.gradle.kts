@@ -35,5 +35,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "TS6_Droid"
+rootProject.name = "TS6_Mobile"
 include(":app")

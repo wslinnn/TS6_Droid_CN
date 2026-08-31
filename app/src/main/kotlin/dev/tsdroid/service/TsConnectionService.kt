@@ -87,8 +87,8 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
     companion object {
         private const val TAG = "TsConnService"
         private const val NOTIFICATION_ID = 1
-        private const val ACTION_DISCONNECT = "com.flammedemon.ts6droid.DISCONNECT"
-        private const val ACTION_TOGGLE_MUTE = "com.flammedemon.ts6droid.TOGGLE_MUTE"
+        private const val ACTION_DISCONNECT = "com.wslinnn.ts6mobile.DISCONNECT"
+        private const val ACTION_TOGGLE_MUTE = "com.wslinnn.ts6mobile.TOGGLE_MUTE"
         private const val SPEAKER_DELAY_MS = 500L
 
         var instance: TsConnectionService? = null
