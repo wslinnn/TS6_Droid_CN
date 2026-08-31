@@ -452,14 +452,22 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                             return
                         }
 
-                        // Skip system error messages and abuse protection messages
-                        if (text.contains("滥用保护") || 
-                            text.contains("abuse protection") ||
-                            text.contains("flood protection") ||
-                            text.contains("spam protection") ||
-                            text.contains("Cannot perform this action due to") ||
-                            text.contains("无法采取此动作") ||
-                            text.contains("Action currently not possible")) {
+                        // Server-side errors (flood/abuse protection etc.)
+                        // surface as text_message without a real third-party
+                        // sender. Only filter them there — otherwise regular
+                        // user messages mentioning these words are dropped.
+                        val myId = tsClient?.clientId
+                        if ((senderId == null || senderId == myId) &&
+                            (
+                                text.contains("滥用保护") ||
+                                text.contains("abuse protection") ||
+                                text.contains("flood protection") ||
+                                text.contains("spam protection") ||
+                                text.contains("Cannot perform this action due to") ||
+                                text.contains("无法采取此动作") ||
+                                text.contains("Action currently not possible")
+                            )
+                        ) {
                             Log.i(TAG, "Skipping system abuse protection message: $text")
                             return
                         }
@@ -469,7 +477,6 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                         Log.d(TAG, "Text message: target=$target sender=$sender text=$safeText")
 
                         // Skip our own messages — we already added them locally
-                        val myId = tsClient?.clientId
                         if (myId != null && senderId == myId) return
 
                         // Safely parse file attachment with extra protection
