@@ -6,7 +6,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.graphics.BitmapFactory
+import android.net.Uri
+import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.graphics.ImageBitmap
@@ -109,6 +112,16 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
+
+    /** Dialogue « Se connecter directement / Accorder l'autorisation » (décision ⑨). */
+    private val _overlayDialogVisible = MutableStateFlow(false)
+    val overlayDialogVisible: StateFlow<Boolean> = _overlayDialogVisible.asStateFlow()
+
+    /** Favori en attente de l'autorisation de superposition avant connexion. */
+    private var pendingBookmark: ServerBookmark? = null
+
+    /** Réglages système ouverts ; seule la reprise qui suit déclenche la revérification. */
+    private var awaitingOverlayGrant = false
 
     private var serviceConnection: ServiceConnection? = null
     private var connectJob: kotlinx.coroutines.Job? = null
@@ -250,6 +263,88 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             }
         }
         connect(onConnected)
+    }
+
+    private fun hasOverlayPermission(): Boolean {
+        return Settings.canDrawOverlays(getApplication())
+    }
+
+    /**
+     * Point d'entrée unique du bouton « Connecter » de l'accueil : n'affiche le
+     * dialogue d'explication que si la fenêtre flottante est activée et que
+     * l'autorisation manque (décision ⑨) ; sinon connecte directement. Une
+     * connexion déjà active sur la même adresse court-circuite le dialogue.
+     */
+    fun onHomeConnectClicked(bookmark: ServerBookmark, onConnected: () -> Unit) {
+        val alreadyActive = TsConnectionService.instance?.hasActiveConnection(bookmark.address) == true
+        if (alreadyActive || hasOverlayPermission() || !enableFloatingWindow.value) {
+            connectBookmark(bookmark, onConnected)
+            return
+        }
+        pendingBookmark = bookmark
+        _overlayDialogVisible.value = true
+    }
+
+    /**
+     * Choix « Se connecter directement » du dialogue : désactive la fenêtre
+     * flottante (choix mémorisé, les connexions suivantes ne demandent plus) puis
+     * connecte immédiatement.
+     */
+    fun onConnectWithoutOverlay(onConnected: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                settingsStore.setEnableFloatingWindow(false)
+            } catch (_: Exception) {
+            }
+        }
+        _overlayDialogVisible.value = false
+        val bookmark = pendingBookmark
+        pendingBookmark = null
+        if (bookmark != null) connectBookmark(bookmark, onConnected) else connect(onConnected)
+    }
+
+    /**
+     * Choix « Accorder l'autorisation » du dialogue : ouvre la page système de
+     * l'autorisation de superposition ; la suite est gérée par
+     * [recheckOverlayAndContinue] au retour.
+     */
+    fun onOverlayDialogNext() {
+        val context = getApplication<Application>()
+        val intent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:${context.packageName}"),
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            awaitingOverlayGrant = true
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            awaitingOverlayGrant = false
+            dismissOverlayDialog()
+            _error.value = getApplication<Application>().getString(R.string.error_overlay_permission_required)
+            Log.w(TAG, "Unable to open the overlay permission settings", e)
+        }
+    }
+
+    fun dismissOverlayDialog() {
+        _overlayDialogVisible.value = false
+        pendingBookmark = null
+    }
+
+    /**
+     * Revérification au ON_RESUME après le passage dans les réglages : autorisé →
+     * poursuit automatiquement la connexion (décision ②) ; toujours refusé →
+     * ferme le dialogue et affiche le rappel (décision ③).
+     */
+    fun recheckOverlayAndContinue(onConnected: () -> Unit) {
+        if (!awaitingOverlayGrant) return
+        awaitingOverlayGrant = false
+        val bookmark = pendingBookmark
+        dismissOverlayDialog()
+        if (hasOverlayPermission()) {
+            bookmark?.let { connectBookmark(it, onConnected) } ?: connect(onConnected)
+        } else {
+            _error.value = getApplication<Application>().getString(R.string.error_overlay_permission_required)
+        }
     }
 
     fun tryAutoReconnect(onConnected: () -> Unit) {

@@ -149,6 +149,10 @@
     <string name="connection_failed">Échec de la connexion</string>
     <string name="browse_failed">Échec du parcours des channels</string>
     <string name="error_overlay_permission_required">Veuillez accorder l\'autorisation « Superposition » pour la fenêtre flottante</string>
+    <string name="overlay_permission_title">Autorisation de superposition requise</string>
+    <string name="overlay_permission_message">La fenêtre flottante affiche votre état de parole et des commandes rapides quand vous passez à une autre application. Vous pouvez vous connecter directement (la fenêtre flottante restera désactivée, réactivable plus tard dans les paramètres), ou accorder l\'autorisation maintenant.</string>
+    <string name="overlay_permission_skip">Connexion directe</string>
+    <string name="overlay_permission_next">Accorder l\'autorisation</string>
     <string name="error_service_start_failed">Impossible de démarrer le service en arrière-plan</string>
     <string name="error_not_connected">Non connecté au serveur</string>
     <string name="download_failed">Échec du téléchargement</string>

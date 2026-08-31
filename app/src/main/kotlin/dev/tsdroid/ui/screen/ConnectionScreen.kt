@@ -58,6 +58,8 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -100,6 +102,7 @@ fun ConnectionScreen(
     val editingIndex by viewModel.editingIndex.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val overlayDialogVisible by viewModel.overlayDialogVisible.collectAsStateWithLifecycle()
     val browsedChannels by viewModel.browsedChannels.collectAsStateWithLifecycle()
     val isBrowsing by viewModel.isBrowsing.collectAsStateWithLifecycle()
     val showChannelPicker by viewModel.showChannelPicker.collectAsStateWithLifecycle()
@@ -139,6 +142,12 @@ fun ConnectionScreen(
             snackbarHostState.showSnackbar(it)
             viewModel.clearError()
         }
+    }
+
+    // Retour des réglages système : autorisé → connexion automatique (décision ②),
+    // refusé → dialogue fermé + rappel (décision ③). Sans effet sinon.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        viewModel.recheckOverlayAndContinue(onConnected)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -259,7 +268,7 @@ fun ConnectionScreen(
                                                 )
                                             }
                                             FilledTonalButton(
-                                                onClick = { viewModel.connectBookmark(bookmark, onConnected) },
+                                                onClick = { viewModel.onHomeConnectClicked(bookmark, onConnected) },
                                                 enabled = !isConnecting,
                                             ) {
                                                 Text(stringResource(R.string.connect))
@@ -337,6 +346,25 @@ fun ConnectionScreen(
                     dismissButton = {
                         TextButton(onClick = { deleteConfirmIndex = null }) {
                             Text(stringResource(R.string.cancel))
+                        }
+                    },
+                )
+            }
+
+            if (overlayDialogVisible) {
+                AlertDialog(
+                    onDismissRequest = { viewModel.dismissOverlayDialog() },
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    title = { Text(stringResource(R.string.overlay_permission_title)) },
+                    text = { Text(stringResource(R.string.overlay_permission_message)) },
+                    confirmButton = {
+                        TextButton(onClick = { viewModel.onOverlayDialogNext() }) {
+                            Text(stringResource(R.string.overlay_permission_next))
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { viewModel.onConnectWithoutOverlay(onConnected) }) {
+                            Text(stringResource(R.string.overlay_permission_skip))
                         }
                     },
                 )

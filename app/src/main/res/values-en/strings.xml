@@ -106,6 +106,10 @@
     <string name="connection_failed">Connection failed</string>
     <string name="browse_failed">Failed to browse channels</string>
     <string name="error_overlay_permission_required">Please grant the \'Display over other apps\' permission to use the floating window</string>
+    <string name="overlay_permission_title">Overlay permission required</string>
+    <string name="overlay_permission_message">The floating window shows your speaking status and quick controls when you switch to another app. You can connect anyway (the floating window stays off and can be re-enabled later in Settings), or grant the permission now.</string>
+    <string name="overlay_permission_skip">Connect anyway</string>
+    <string name="overlay_permission_next">Grant permission</string>
     <string name="error_service_start_failed">Failed to start the background service</string>
     <string name="error_not_connected">Not connected to the server</string>
     <string name="download_failed">Download failed</string>
