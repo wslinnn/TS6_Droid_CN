@@ -1,8 +1,10 @@
 package dev.tsdroid.ui.component
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imeNestedScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -24,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 private const val INITIAL_PAGE = 15
 private const val PAGE_SIZE = 20
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChatView(
     messages: List<ChatMessage>,
@@ -71,7 +74,10 @@ fun ChatView(
     }
 
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            // Swipe down past the newest message collapses the keyboard (API 30+)
+            .imeNestedScroll(),
         state = listState,
         contentPadding = PaddingValues(8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
