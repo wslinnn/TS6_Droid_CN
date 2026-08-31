@@ -775,10 +775,13 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                     modifier = Modifier
                         .size(40.dp) // Make smaller
                         .pointerInput(Unit) {
-                            detectDragGestures { change, dragAmount ->
+                            detectDragGestures(
+                                onDragEnd = { saveCachedPosition() },
+                                onDrag = { change, dragAmount ->
                                 change.consume()
                                 onDrag(dragAmount.x, dragAmount.y)
-                            }
+                                },
+                            )
                         }
                         .clickable { onToggleExpand() },
                     shape = CircleShape,
@@ -834,10 +837,13 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .pointerInput(Unit) {
-                                    detectDragGestures { change, dragAmount ->
+                                    detectDragGestures(
+                                        onDragEnd = { saveCachedPosition() },
+                                        onDrag = { change, dragAmount ->
                                         change.consume()
                                         onDrag(dragAmount.x, dragAmount.y)
-                                    }
+                                        },
+                                    )
                                 }
                                 .padding(bottom = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
