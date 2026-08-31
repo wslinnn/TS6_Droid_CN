@@ -90,7 +90,6 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         private const val ACTION_DISCONNECT = "com.flammedemon.ts6droid.DISCONNECT"
         private const val ACTION_TOGGLE_MUTE = "com.flammedemon.ts6droid.TOGGLE_MUTE"
         private const val SPEAKER_DELAY_MS = 500L
-        private const val AVATAR_REFRESH_INTERVAL_MS = 30000L // 30 seconds
 
         var instance: TsConnectionService? = null
             private set
@@ -191,23 +190,13 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                             if (pendingSpeakerId == speakerId) {
                                 overlayActiveSpeakerId = speakerId
                                 overlayActiveSpeakerName = findUserNickname(speakerId)
+                                // Cached avatar only — ServerViewModel loads avatars
+                                // as the user list refreshes; re-downloading on
+                                // every talk burst spams the server with transfers
                                 val speakerUser = tsClient.users.value.find { it.id == speakerId }
                                 val uid = speakerUser?.uid
-                                if (!uid.isNullOrEmpty()) {
-                                    serviceScope.launch(Dispatchers.IO) {
-                                        // Force refresh speaker avatar
-                                        avatarCache.clearMemoryCache(uid)
-                                        avatarCache.loadAvatar(uid, tsClient)
-                                        val avatar = avatarCache.getAvatar(uid)
-                                        withContext(Dispatchers.Main) {
-                                            if (overlayActiveSpeakerId == speakerId) {
-                                                overlayActiveSpeakerAvatar = avatar
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    overlayActiveSpeakerAvatar = null
-                                }
+                                overlayActiveSpeakerAvatar =
+                                    if (!uid.isNullOrEmpty()) avatarCache.getAvatar(uid) else null
                             }
                         }
                     }
@@ -259,71 +248,18 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                 // Only update if still the pending state
                 if (pendingLocalSpeaking == isSpeaking) {
                     delayedLocalSpeaking = isSpeaking
-                    
-                    // Force refresh local user avatar when speaking starts
+
                     if (isSpeaking) {
                         val myId = tsClient.clientId
                         val localUser = tsClient.users.value.find { it.id == myId }
                         val localUid = localUser?.uid
                         if (!localUid.isNullOrEmpty()) {
-                            serviceScope.launch(Dispatchers.IO) {
-                                // Force refresh local avatar
-                                avatarCache.clearMemoryCache(localUid)
-                                avatarCache.loadAvatar(localUid, tsClient)
-                                val avatar = avatarCache.getAvatar(localUid)
-                                withContext(Dispatchers.Main) {
-                                    if (overlayActiveSpeakerId == myId) {
-                                        overlayActiveSpeakerAvatar = avatar
-                                    }
-                                }
-                            }
+                            overlayActiveSpeakerAvatar = avatarCache.getAvatar(localUid)
                         }
                     }
                 }
             }
         }.launchIn(serviceScope)
-        
-        // Periodic avatar refresh — force re-download ALL user avatars to keep them fresh
-        serviceScope.launch {
-            while (true) {
-                delay(AVATAR_REFRESH_INTERVAL_MS)
-                val myId = tsClient.clientId
-                if (myId == null) continue
-                
-                val currentUsers = tsClient.users.value
-                val currentChannelId = currentUsers.find { it.id == myId }?.channelId
-                val channelUsers = currentUsers.filter { it.channelId == currentChannelId }
-                
-                // Collect all UIDs in the current channel
-                val uids = channelUsers.mapNotNull { it.uid }.filter { it.isNotEmpty() }.toList()
-                if (uids.isEmpty()) continue
-                
-                serviceScope.launch(Dispatchers.IO) {
-                    // Clear memory cache for all channel users to force re-download
-                    avatarCache.clearMemoryCache(*uids.toTypedArray())
-                    
-                    // Re-download all avatars
-                    for (uid in uids) {
-                        avatarCache.loadAvatar(uid, tsClient)
-                    }
-                    
-                    // Update the current speaker avatar if someone is speaking
-                    val currentSpeakerId = overlayActiveSpeakerId
-                    if (currentSpeakerId != null) {
-                        val speakerUser = currentUsers.find { it.id == currentSpeakerId }
-                        val speakerUid = speakerUser?.uid
-                        if (!speakerUid.isNullOrEmpty()) {
-                            val updatedAvatar = avatarCache.getAvatar(speakerUid)
-                            withContext(Dispatchers.Main) {
-                                if (overlayActiveSpeakerId == currentSpeakerId) {
-                                    overlayActiveSpeakerAvatar = updatedAvatar
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
