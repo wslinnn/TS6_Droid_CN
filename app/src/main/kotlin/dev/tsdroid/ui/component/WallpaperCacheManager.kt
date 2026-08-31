@@ -48,7 +48,6 @@ object WallpaperCacheManager {
             if (file.exists()) return@withContext
 
             val maxSizeBytes = SettingsCacheSizeHelper.getMaxCacheSize(context) * 1024L * 1024L
-            if (getCacheSizeBytes() >= maxSizeBytes) return@withContext
 
             val conn = URL(imageUrl).openConnection() as HttpURLConnection
             conn.connectTimeout = 8000
@@ -59,7 +58,21 @@ object WallpaperCacheManager {
                 }
             }
             conn.disconnect()
+
+            // Keep the cache within its budget by evicting oldest first —
+            // previously a full cache just refused new wallpapers forever
+            evictOldFiles(maxSizeBytes)
         } catch (_: Exception) {
+        }
+    }
+
+    private fun evictOldFiles(maxBytes: Long) {
+        var size = getCacheSizeBytes()
+        if (size <= maxBytes) return
+        for (file in getCachedFiles().asReversed()) { // oldest (last modified) first
+            if (size <= maxBytes) break
+            val length = file.length()
+            if (file.delete()) size -= length
         }
     }
 
