@@ -301,7 +301,11 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun bindToService() {
         if (bound) return
-        
+        // Claim the bind up front: during the service-instance wait window a
+        // second call would otherwise pass the guard and spawn duplicate
+        // collectors (duplicated chat messages, double-counted unread)
+        bound = true
+
         viewModelScope.launch {
             var attempts = 0
             while (TsConnectionService.instance == null && attempts < 50) {
@@ -312,6 +316,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             val service = TsConnectionService.instance
             if (service == null) {
                 Log.e(TAG, "Failed to bind to TsConnectionService: instance is null")
+                bound = false
                 return@launch
             }
 
@@ -417,8 +422,6 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
 
             // Start event loop (guarded by AtomicBoolean — safe if already running)
             service.tsClient.startEventLoop()
-            
-            bound = true
         }
     }
 
