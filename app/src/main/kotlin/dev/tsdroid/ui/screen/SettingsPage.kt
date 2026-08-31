@@ -146,14 +146,16 @@ fun SettingsPage(
 
                 // 音量增益
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    var gainValue by remember(audioGain) { mutableFloatStateOf(audioGain) }
                     Text(
-                        text = "${stringResource(R.string.audio_gain)} : ${stringResource(R.string.audio_gain_value, audioGain)}",
+                        text = "${stringResource(R.string.audio_gain)} : ${stringResource(R.string.audio_gain_value, gainValue)}",
                         style = MaterialTheme.typography.bodyLarge,
                     )
                     Spacer(Modifier.height(4.dp))
                     Slider(
-                        value = audioGain,
-                        onValueChange = { scope.launch { settingsStore.setAudioGain(it) } },
+                        value = gainValue,
+                        onValueChange = { gainValue = it },
+                        onValueChangeFinished = { scope.launch { settingsStore.setAudioGain(gainValue) } },
                         valueRange = 1.0f..8.0f,
                         steps = 13,
                     )
