@@ -155,6 +155,7 @@
     <string name="overlay_permission_message">La fenêtre flottante affiche votre état de parole et des commandes rapides quand vous passez à une autre application. Vous pouvez vous connecter directement (la fenêtre flottante restera désactivée, réactivable plus tard dans les paramètres), ou accorder l\'autorisation maintenant.</string>
     <string name="overlay_permission_skip">Connexion directe</string>
     <string name="overlay_permission_next">Accorder l\'autorisation</string>
+    <string name="notification_denied_hint">Notifications désactivées : l\'état de connexion ne sera pas visible</string>
     <string name="error_service_start_failed">Impossible de démarrer le service en arrière-plan</string>
     <string name="error_not_connected">Non connecté au serveur</string>
     <string name="download_failed">Échec du téléchargement</string>

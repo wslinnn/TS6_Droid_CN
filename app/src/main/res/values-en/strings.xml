@@ -112,6 +112,7 @@
     <string name="overlay_permission_message">The floating window shows your speaking status and quick controls when you switch to another app. You can connect anyway (the floating window stays off and can be re-enabled later in Settings), or grant the permission now.</string>
     <string name="overlay_permission_skip">Connect anyway</string>
     <string name="overlay_permission_next">Grant permission</string>
+    <string name="notification_denied_hint">Notifications are off; the connection status notification won\'t show</string>
     <string name="error_service_start_failed">Failed to start the background service</string>
     <string name="error_not_connected">Not connected to the server</string>
     <string name="download_failed">Download failed</string>

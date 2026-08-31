@@ -1,5 +1,9 @@
 package dev.tsdroid.ui.screen
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import android.widget.Toast
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -8,6 +12,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -98,6 +103,9 @@ import dev.tsdroid.viewmodel.ServerViewModel
 import kotlinx.coroutines.flow.StateFlow
 import dev.tsdroid.service.WhisperManager
 
+/** Décision ⑦ : rappel « notifications désactivées » limité à une fois par processus. */
+private var notificationHintShown = false
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ServerScreen(
@@ -166,6 +174,21 @@ fun ServerScreen(
     DisposableEffect(Unit) {
         viewModel.bindToService()
         onDispose {}
+    }
+
+    // Décision ⑦ : prévenir une seule fois par processus lorsque la notification
+    // d'état de connexion sera invisible (Android 13+, permission refusée)
+    LaunchedEffect(Unit) {
+        if (notificationHintShown) return@LaunchedEffect
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@LaunchedEffect
+        notificationHintShown = true
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            Toast.makeText(context, R.string.notification_denied_hint, Toast.LENGTH_LONG).show()
+        }
     }
 
     // Navigate away only when the session is truly closed; while auto

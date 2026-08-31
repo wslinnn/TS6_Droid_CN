@@ -154,6 +154,7 @@
     <string name="overlay_permission_message">悬浮窗用于在切换到其他应用时显示说话状态和快速面板。可以直接连接（悬浮窗保持关闭，稍后可在设置中重新开启），或去开启权限。</string>
     <string name="overlay_permission_skip">直接连接</string>
     <string name="overlay_permission_next">去开启权限</string>
+    <string name="notification_denied_hint">通知权限已关闭，将看不到连接状态通知</string>
     <string name="error_service_start_failed">后台服务启动失败</string>
     <string name="error_not_connected">未连接到服务器</string>
     <string name="download_failed">下载失败</string>
