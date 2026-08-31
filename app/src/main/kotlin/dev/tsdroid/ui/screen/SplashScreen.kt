@@ -18,6 +18,7 @@ import kotlinx.coroutines.delay
 fun SplashScreen(onReady: () -> Unit) {
     val context = LocalContext.current
     var showContent by remember { mutableStateOf(false) }
+    var timedOut by remember { mutableStateOf(false) }
     val url by AnimeWallpaperState.currentUrl
     val dominantColor by AnimeWallpaperState.dominantColor
 
@@ -32,11 +33,13 @@ fun SplashScreen(onReady: () -> Unit) {
         }
     }
 
-    // Safety timeout: if no URL after 3s, proceed anyway (cached fallback handles it)
+    // Safety timeout: if no URL after 3s, proceed immediately — the cached
+    // fallback covers it and waiting longer just pads a dead screen
     LaunchedEffect(Unit) {
         delay(3000)
         if (!showContent) {
             showContent = true
+            timedOut = true
         }
     }
 
@@ -45,7 +48,9 @@ fun SplashScreen(onReady: () -> Unit) {
             delay(600)
             onReady()
         } else if (showContent && dominantColor == null) {
-            delay(1500)
+            // Late wallpaper still gets the fade-in grace period; a timeout
+            // exit skips it entirely (worst case 3s instead of 4.5s)
+            delay(if (timedOut) 0 else 1500)
             onReady()
         }
     }
