@@ -122,7 +122,7 @@ fun ConnectionScreen(
     val isConnecting = connectionState == ConnectionState.CONNECTING
     val context = LocalContext.current
     val settingsStore = remember { dev.tsdroid.data.SettingsStore(context) }
-    val animeBackground by settingsStore.animeBackground.collectAsStateWithLifecycle(initialValue = true)
+    val animeBackground by settingsStore.animeBackground.collectAsStateWithLifecycle(initialValue = false)
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()

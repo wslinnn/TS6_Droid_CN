@@ -58,7 +58,7 @@ fun SettingsPage(
     // Default matches AudioBridge/store default (enabled) so the switch
     // doesn't flash off→on on first composition
     val enableFloatingWindow by settingsStore.enableFloatingWindow.collectAsStateWithLifecycle(initialValue = true)
-    val animeBackground by settingsStore.animeBackground.collectAsStateWithLifecycle(initialValue = true)
+    val animeBackground by settingsStore.animeBackground.collectAsStateWithLifecycle(initialValue = false)
     val noiseSuppression by settingsStore.noiseSuppression.collectAsStateWithLifecycle(initialValue = true)
     val pttMode by settingsStore.pttMode.collectAsStateWithLifecycle(initialValue = true)
     val audioGain by settingsStore.audioGain.collectAsStateWithLifecycle(initialValue = 1.0f)

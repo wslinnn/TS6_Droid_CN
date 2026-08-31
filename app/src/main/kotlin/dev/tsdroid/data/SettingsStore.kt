@@ -39,8 +39,9 @@ class SettingsStore(private val context: Context) {
     val enableFloatingWindow: Flow<Boolean> = context.settingsDataStore.data
         .map { it[KEY_ENABLE_FLOATING_WINDOW] ?: true }
 
+    // Default off: full-screen wallpapers hurt text readability on every screen
     val animeBackground: Flow<Boolean> = context.settingsDataStore.data
-        .map { it[KEY_ANIME_BACKGROUND] ?: true }
+        .map { it[KEY_ANIME_BACKGROUND] ?: false }
 
     suspend fun setAudioGain(gain: Float) {
         context.settingsDataStore.edit { it[KEY_AUDIO_GAIN] = gain }

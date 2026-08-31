@@ -218,7 +218,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     val animeBackground: StateFlow<Boolean> = settingsStore.animeBackground
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val noiseSuppression: StateFlow<Boolean> = settingsStore.noiseSuppression
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)

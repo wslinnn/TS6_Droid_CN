@@ -40,7 +40,7 @@ fun AboutScreen(onBack: () -> Unit) {
     val repoUrl = "https://github.com/wslinnn/TS6_Droid_CN"
     val scrollState = rememberScrollState()
     val settingsStore = remember { SettingsStore(context) }
-    val animeBackground by settingsStore.animeBackground.collectAsStateWithLifecycle(initialValue = true)
+    val animeBackground by settingsStore.animeBackground.collectAsStateWithLifecycle(initialValue = false)
 
     var contributors by remember { mutableStateOf<List<GitHubContributor>>(emptyList()) }
     var isLoadingContributors by remember { mutableStateOf(true) }
