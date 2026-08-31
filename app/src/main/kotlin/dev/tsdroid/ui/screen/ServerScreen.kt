@@ -28,7 +28,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -127,7 +126,7 @@ fun ServerScreen(
     val mutedUserIds by viewModel.mutedUserIds.collectAsStateWithLifecycle()
     val fileManagerOpen by viewModel.fileManagerOpen.collectAsStateWithLifecycle()
     val fileList by viewModel.fileList.collectAsStateWithLifecycle()
-    val previewImageBytes by viewModel.previewImageBytes.collectAsStateWithLifecycle()
+    val previewImageBitmap by viewModel.previewImageBitmap.collectAsStateWithLifecycle()
     val previewImageName by viewModel.previewImageName.collectAsStateWithLifecycle()
     val currentFilePath by viewModel.currentFilePath.collectAsStateWithLifecycle()
     val fileManagerLoading by viewModel.fileManagerLoading.collectAsStateWithLifecycle()
@@ -500,8 +499,8 @@ fun ServerScreen(
         }
     }
 
-    // Image preview overlay
-    if (previewImageBytes != null) {
+    // Image preview overlay (bitmap is pre-decoded off the main thread)
+    if (previewImageBitmap != null) {
         Dialog(onDismissRequest = { viewModel.closePreview() }) {
             Box(
                 modifier = Modifier
@@ -511,18 +510,13 @@ fun ServerScreen(
                     .clickable { viewModel.closePreview() },
                 contentAlignment = Alignment.Center,
             ) {
-                previewImageBytes?.let { bytes ->
-                    val bitmap = remember(bytes) {
-                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    }
-                    if (bitmap != null) {
-                        androidx.compose.foundation.Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = previewImageName,
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
+                previewImageBitmap?.let { bitmap ->
+                    androidx.compose.foundation.Image(
+                        bitmap = bitmap,
+                        contentDescription = previewImageName,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
             }
         }

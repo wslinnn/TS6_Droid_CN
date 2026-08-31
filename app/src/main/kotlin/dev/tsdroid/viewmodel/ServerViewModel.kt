@@ -123,8 +123,8 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     // In-memory cache: avoids re-reading from disk + re-decoding for the same image
     private val downloadCache = mutableMapOf<String, StateFlow<DownloadState>>()
 
-    private val _previewImageBytes = MutableStateFlow<ByteArray?>(null)
-    val previewImageBytes: StateFlow<ByteArray?> = _previewImageBytes.asStateFlow()
+    private val _previewImageBitmap = MutableStateFlow<ImageBitmap?>(null)
+    val previewImageBitmap: StateFlow<ImageBitmap?> = _previewImageBitmap.asStateFlow()
     private val _previewImageName = MutableStateFlow<String?>(null)
     val previewImageName: StateFlow<String?> = _previewImageName.asStateFlow()
 
@@ -1055,14 +1055,20 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 if (cached == null) {
                     fileCache.put(host, cachePath, bytes)
                 }
-                _previewImageBytes.value = bytes
-                _previewImageName.value = fileName
+                // Decode off the main thread, sampled to a sane size
+                val bitmap = withContext(Dispatchers.Default) {
+                    decodeSampledBitmap(bytes, 2048)?.asImageBitmap()
+                }
+                if (bitmap != null) {
+                    _previewImageBitmap.value = bitmap
+                    _previewImageName.value = fileName
+                }
             }
         }
     }
 
     fun closePreview() {
-        _previewImageBytes.value = null
+        _previewImageBitmap.value = null
         _previewImageName.value = null
     }
 
