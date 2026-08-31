@@ -147,6 +147,10 @@
     <string name="error_nickname_too_short">昵称至少需要3个字符</string>
     <string name="connection_failed">连接失败</string>
     <string name="browse_failed">浏览频道失败</string>
+    <string name="error_overlay_permission_required">请授予「显示在其他应用上层」权限以使用悬浮窗</string>
+    <string name="error_service_start_failed">后台服务启动失败</string>
+    <string name="error_not_connected">未连接到服务器</string>
+    <string name="download_failed">下载失败</string>
 
     <!-- AboutScreen -->
     <string name="about_software">关于软件 / About</string>

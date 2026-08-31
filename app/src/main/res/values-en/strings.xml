@@ -105,6 +105,10 @@
     <string name="error_nickname_too_short">Nickname must be at least 3 characters long</string>
     <string name="connection_failed">Connection failed</string>
     <string name="browse_failed">Failed to browse channels</string>
+    <string name="error_overlay_permission_required">Please grant the \'Display over other apps\' permission to use the floating window</string>
+    <string name="error_service_start_failed">Failed to start the background service</string>
+    <string name="error_not_connected">Not connected to the server</string>
+    <string name="download_failed">Download failed</string>
 
     <!-- AboutScreen -->
     <string name="about_software">About / 关于软件</string>

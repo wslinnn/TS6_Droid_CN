@@ -184,7 +184,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             val service = TsConnectionService.instance
             if (service == null) {
                 _connectionState.value = ConnectionState.DISCONNECTED
-                _error.value = "Failed to start background service."
+                _error.value = getApplication<Application>().getString(R.string.error_service_start_failed)
                 return@launch
             }
 

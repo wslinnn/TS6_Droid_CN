@@ -825,7 +825,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
 
         val state = MutableStateFlow<DownloadState>(DownloadState.Downloading)
         val client = tsClient ?: run {
-            state.value = DownloadState.Error("Pas connecté")
+            state.value = DownloadState.Error(getApplication<Application>().getString(R.string.error_not_connected))
             return state
         }
 
@@ -852,7 +852,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } else {
                 downloadCache.remove(cacheKey)
-                state.value = DownloadState.Error("Échec du téléchargement")
+                state.value = DownloadState.Error(getApplication<Application>().getString(R.string.download_failed))
             }
         }
         return state

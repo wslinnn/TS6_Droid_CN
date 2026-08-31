@@ -148,6 +148,10 @@
     <string name="error_nickname_too_short">Le pseudo doit contenir au moins 3 caractères</string>
     <string name="connection_failed">Échec de la connexion</string>
     <string name="browse_failed">Échec du parcours des channels</string>
+    <string name="error_overlay_permission_required">Veuillez accorder l\'autorisation « Superposition » pour la fenêtre flottante</string>
+    <string name="error_service_start_failed">Impossible de démarrer le service en arrière-plan</string>
+    <string name="error_not_connected">Non connecté au serveur</string>
+    <string name="download_failed">Échec du téléchargement</string>
 
     <!-- AboutScreen -->
     <string name="about_software">À propos / About</string>
