@@ -95,24 +95,20 @@ class BookmarkStore(private val context: Context) {
     }
 
     private fun parseBookmarks(json: String): List<ServerBookmark> {
-        if (json == "[]") return emptyList()
         return try {
-            val entries = json.removeSurrounding("[", "]").split("},{")
-            entries.map { entry ->
-                val clean = entry.removePrefix("{").removeSuffix("}")
-                val fields = mutableMapOf<String, String>()
-                for (pair in clean.split("\",\"")) {
-                    val kv = pair.replace("\"", "").split(":", limit = 2)
-                    if (kv.size == 2) fields[kv[0]] = kv[1]
-                }
+            val arr = org.json.JSONArray(json)
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.getJSONObject(i)
+                val address = o.optString("address")
+                if (address.isEmpty()) return@mapNotNull null
                 ServerBookmark(
-                    name = fields["name"] ?: "",
-                    address = fields["address"] ?: "",
-                    nickname = fields["nickname"] ?: "",
-                    password = fields["password"]?.takeIf { it != "null" },
-                    channel = fields["channel"]?.takeIf { it != "null" },
-                    serverName = fields["serverName"]?.takeIf { it != "null" },
-                    iconId = fields["iconId"]?.toLongOrNull() ?: 0,
+                    name = o.optString("name"),
+                    address = address,
+                    nickname = o.optString("nickname"),
+                    password = o.optString("password").takeIf { it.isNotEmpty() && it != "null" },
+                    channel = o.optString("channel").takeIf { it.isNotEmpty() && it != "null" },
+                    serverName = o.optString("serverName").takeIf { it.isNotEmpty() && it != "null" },
+                    iconId = o.optLong("iconId", 0L),
                 )
             }
         } catch (_: Exception) {
@@ -121,10 +117,20 @@ class BookmarkStore(private val context: Context) {
     }
 
     private fun serializeBookmarks(bookmarks: List<ServerBookmark>): String {
-        return bookmarks.joinToString(",", "[", "]") { b ->
-            """{"name":"${escape(b.name)}","address":"${escape(b.address)}","nickname":"${escape(b.nickname)}","password":"${b.password ?: "null"}","channel":"${b.channel ?: "null"}","serverName":"${b.serverName ?: "null"}","iconId":"${b.iconId}"}"""
+        val arr = org.json.JSONArray()
+        for (b in bookmarks) {
+            arr.put(
+                org.json.JSONObject().apply {
+                    put("name", b.name)
+                    put("address", b.address)
+                    put("nickname", b.nickname)
+                    put("password", b.password ?: "null")
+                    put("channel", b.channel ?: "null")
+                    put("serverName", b.serverName ?: "null")
+                    put("iconId", b.iconId)
+                }
+            )
         }
+        return arr.toString()
     }
-
-    private fun escape(s: String): String = s.replace("\"", "\\\"")
 }
