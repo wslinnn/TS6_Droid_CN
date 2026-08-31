@@ -175,17 +175,59 @@ fun MessageBubble(
                     )
                 }
 
-                // Images
-                for (imageUrl in parsed.imageUrls) {
-                    AsyncImage(
-                        model = imageUrl,
-                        contentDescription = stringResource(R.string.image),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 4.dp)
-                            .clip(RoundedCornerShape(8.dp)),
-                        contentScale = ContentScale.FillWidth,
-                    )
+                // Images — respect the auto-load setting: inline [img]/URL
+                // images are remote fetches and stay unloaded until tapped
+                if (parsed.imageUrls.isNotEmpty()) {
+                    if (autoLoadImages) {
+                        for (imageUrl in parsed.imageUrls) {
+                            AsyncImage(
+                                model = imageUrl,
+                                contentDescription = stringResource(R.string.image),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp)
+                                    .clip(RoundedCornerShape(8.dp)),
+                                contentScale = ContentScale.FillWidth,
+                            )
+                        }
+                    } else {
+                        var loadInlineImages by remember(message.text) { mutableStateOf(false) }
+                        if (loadInlineImages) {
+                            for (imageUrl in parsed.imageUrls) {
+                                AsyncImage(
+                                    model = imageUrl,
+                                    contentDescription = stringResource(R.string.image),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 4.dp)
+                                        .clip(RoundedCornerShape(8.dp)),
+                                    contentScale = ContentScale.FillWidth,
+                                )
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier
+                                    .padding(top = 4.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { loadInlineImages = true }
+                                    .padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    Icons.Default.Image,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = stringResource(R.string.tap_to_load_images),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
