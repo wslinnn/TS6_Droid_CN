@@ -774,8 +774,11 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun downloadAttachment(attachment: FileAttachment): StateFlow<DownloadState> {
+        val channelId = if (attachment.channelId != 0L) attachment.channelId else currentChannelId()
         val host = serverAddress?.substringBefore(':') ?: "unknown"
-        val cachePath = attachment.fileName.trimStart('/')
+        // Include the channel in the cache path: identical file names in
+        // different channels must not collide
+        val cachePath = "ch$channelId/" + attachment.fileName.trimStart('/')
         val cacheKey = "$host/$cachePath"
 
         // Return existing in-memory result if already loaded
@@ -788,7 +791,6 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             state.value = DownloadState.Error("Pas connecté")
             return state
         }
-        val channelId = if (attachment.channelId != 0L) attachment.channelId else currentChannelId()
 
         downloadCache[cacheKey] = state
 
@@ -975,7 +977,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         val currentPath = _currentFilePath.value
         val fullName = currentPath.trimStart('/') + fileName
         val host = serverAddress?.substringBefore(':') ?: "unknown"
-        val cachePath = fullName.trimStart('/')
+        val cachePath = "ch$channelId/$fullName"
 
         viewModelScope.launch(Dispatchers.IO) {
             val cached = fileCache.get(host, cachePath)
@@ -1000,7 +1002,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         val currentPath = _currentFilePath.value
         val fullName = currentPath.trimStart('/') + fileName
         val host = serverAddress?.substringBefore(':') ?: "unknown"
-        val cachePath = fullName.trimStart('/')
+        val cachePath = "ch$channelId/$fullName"
 
         viewModelScope.launch(Dispatchers.IO) {
             val cached = fileCache.get(host, cachePath)

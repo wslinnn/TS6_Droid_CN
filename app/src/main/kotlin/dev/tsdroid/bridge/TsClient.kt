@@ -95,6 +95,11 @@ class TsClient {
 
     private val downloadCallbacks = ConcurrentHashMap<String, CompletableDeferred<ByteArray>>()
     private val uploadCallbacks = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
+    // path → channelId of the in-flight request; completion events carry only
+    // the path, so the channel is resolved from here (prevents files with the
+    // same name in different channels from mixing up callbacks)
+    private val downloadKeys = ConcurrentHashMap<String, Long>()
+    private val uploadKeys = ConcurrentHashMap<String, Long>()
     private val fileListCallbacks = ConcurrentHashMap<String, CompletableDeferred<List<TsFileEntry>>>()
 
     private var eventLoopJob: Job? = null
@@ -293,22 +298,26 @@ class TsClient {
             "file_downloaded" -> {
                 val path = event.data["path"] as? String ?: return
                 val data = event.data["data"] as? ByteArray ?: return
-                Log.d(TAG, "File downloaded: $path (${data.size} bytes)")
-                downloadCallbacks.remove(path)?.complete(data)
+                val channelId = downloadKeys.remove(path) ?: 0L
+                Log.d(TAG, "File downloaded: ch=$channelId path=$path (${data.size} bytes)")
+                downloadCallbacks.remove("$channelId:$path")?.complete(data)
             }
             "file_uploaded" -> {
                 val path = event.data["path"] as? String ?: return
-                Log.d(TAG, "File uploaded: $path")
-                uploadCallbacks.remove(path)?.complete(true)
+                val channelId = uploadKeys.remove(path) ?: 0L
+                Log.d(TAG, "File uploaded: ch=$channelId path=$path")
+                uploadCallbacks.remove("$channelId:$path")?.complete(true)
             }
             "file_transfer_failed" -> {
                 val path = event.data["path"] as? String ?: return
                 val error = event.data["error"] as? String ?: "unknown"
                 Log.w(TAG, "File transfer failed: $path — $error")
-                downloadCallbacks.remove(path)?.completeExceptionally(
+                val dlChannel = downloadKeys.remove(path) ?: 0L
+                downloadCallbacks.remove("$dlChannel:$path")?.completeExceptionally(
                     Exception("File transfer failed: $error")
                 )
-                uploadCallbacks.remove(path)?.complete(false)
+                val upChannel = uploadKeys.remove(path) ?: 0L
+                uploadCallbacks.remove("$upChannel:$path")?.complete(false)
             }
             "file_list_received" -> {
                 val channelId = (event.data["channel_id"] as? Number)?.toLong() ?: return
@@ -496,7 +505,9 @@ class TsClient {
 
     suspend fun downloadFile(channelId: Long, path: String): ByteArray? {
         val deferred = CompletableDeferred<ByteArray>()
-        downloadCallbacks[path] = deferred
+        val key = "$channelId:$path"
+        downloadKeys[path] = channelId
+        downloadCallbacks[key] = deferred
         val started = withContext(nativeDispatcher) {
             try {
                 val c = client ?: return@withContext false
@@ -509,7 +520,8 @@ class TsClient {
             }
         }
         if (!started) {
-            downloadCallbacks.remove(path)
+            downloadCallbacks.remove(key)
+            downloadKeys.remove(path)
             return null
         }
         return withTimeoutOrNull(10_000) {
@@ -519,7 +531,10 @@ class TsClient {
                 Log.w(TAG, "downloadFile await failed for $path", e)
                 null
             }
-        }.also { downloadCallbacks.remove(path) }
+        }.also {
+            downloadCallbacks.remove(key)
+            downloadKeys.remove(path)
+        }
     }
 
     suspend fun listFiles(channelId: Long, path: String): List<TsFileEntry>? {
@@ -593,7 +608,9 @@ class TsClient {
 
     suspend fun uploadFile(channelId: Long, path: String, data: ByteArray, overwrite: Boolean = true): Boolean {
         val deferred = CompletableDeferred<Boolean>()
-        uploadCallbacks[path] = deferred
+        val key = "$channelId:$path"
+        uploadKeys[path] = channelId
+        uploadCallbacks[key] = deferred
         val started = withContext(nativeDispatcher) {
             try {
                 val c = client ?: return@withContext false
@@ -606,7 +623,8 @@ class TsClient {
             }
         }
         if (!started) {
-            uploadCallbacks.remove(path)
+            uploadCallbacks.remove(key)
+            uploadKeys.remove(path)
             return false
         }
         return withTimeoutOrNull(30_000) {
@@ -616,7 +634,10 @@ class TsClient {
                 Log.w(TAG, "uploadFile await failed for $path", e)
                 false
             }
-        }.also { uploadCallbacks.remove(path) } ?: false
+        }.also {
+            uploadCallbacks.remove(key)
+            uploadKeys.remove(path)
+        } ?: false
     }
 
     fun disconnect() {
