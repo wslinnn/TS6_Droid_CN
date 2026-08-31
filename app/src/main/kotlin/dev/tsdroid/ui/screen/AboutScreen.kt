@@ -44,8 +44,10 @@ fun AboutScreen(onBack: () -> Unit) {
 
     var contributors by remember { mutableStateOf<List<GitHubContributor>>(emptyList()) }
     var isLoadingContributors by remember { mutableStateOf(true) }
+    var reloadKey by remember { mutableStateOf(0) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(reloadKey) {
+        isLoadingContributors = true
         withContext(Dispatchers.IO) {
             try {
                 val url = URL("https://api.github.com/repos/YUAXI/TS6_Droid_CN/contributors")
@@ -67,6 +69,7 @@ fun AboutScreen(onBack: () -> Unit) {
                 }
                 contributors = list
             } catch (_: Exception) {
+                contributors = emptyList()
             } finally {
                 isLoadingContributors = false
             }
@@ -167,6 +170,10 @@ fun AboutScreen(onBack: () -> Unit) {
                     text = stringResource(R.string.contributors_load_error),
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(onClick = { reloadKey++ }) {
+                    Text(stringResource(R.string.retry))
+                }
             } else {
                 contributors.forEach { contributor ->
                     Row(
