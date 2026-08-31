@@ -82,8 +82,10 @@ fun AboutScreen(onBack: () -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp)
+                .padding(16.dp)
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f), MaterialTheme.shapes.large)
                 .verticalScroll(scrollState)
+                .padding(16.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -211,20 +213,20 @@ fun AboutScreen(onBack: () -> Unit) {
             Spacer(modifier = Modifier.height(28.dp))
 
             Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)),
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                 modifier = Modifier.padding(bottom = 24.dp)
             ) {
                 Column(modifier = Modifier.padding(18.dp)) {
                     Text(
                         text = stringResource(R.string.about_warning_title),
-                        color = MaterialTheme.colorScheme.error,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
                         style = MaterialTheme.typography.titleSmall,
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
                         text = stringResource(R.string.about_warning_desc),
-                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
+                        color = MaterialTheme.colorScheme.onErrorContainer,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }

@@ -245,7 +245,7 @@ fun ServerScreen(
             TopAppBar(
                 title = { Text(serverInfo?.name ?: stringResource(R.string.server)) },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent,
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
                     scrolledContainerColor = Color.Transparent,
                 ),
                 actions = {
@@ -271,7 +271,11 @@ fun ServerScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.large)
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+                        .padding(vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -437,7 +441,8 @@ fun ServerScreen(
                 selfId = viewModel.myClientId,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 8.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f), MaterialTheme.shapes.large),
             )
 
             // File manager — slides up from bottom, fills content area
