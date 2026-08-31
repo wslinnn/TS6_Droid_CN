@@ -818,6 +818,17 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                                 contentScale = ContentScale.Crop
                             )
                         }
+                        // Expand affordance: subtle chevron so the bubble reads
+                        // as tappable rather than a passive avatar
+                        Icon(
+                            Icons.Default.KeyboardArrowUp,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.85f),
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .size(14.dp)
+                                .background(Color(0x991A1A1A), CircleShape),
+                        )
                     }
                 }
             } else {
@@ -866,7 +877,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                                 overflow = TextOverflow.Ellipsis
                             )
                             IconButton(onClick = onToggleExpand, modifier = Modifier.size(28.dp)) {
-                                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Minimize", tint = Color.White)
+                                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Minimize", tint = Color.White)
                             }
                         }
 
