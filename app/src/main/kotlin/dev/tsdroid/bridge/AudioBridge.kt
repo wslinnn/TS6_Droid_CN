@@ -164,7 +164,7 @@ class AudioBridge(
             }
             while (isActive && _isCapturing.value) {
                 val read = try {
-                    audioRecord?.read(buffer, 0, FRAME_SIZE_SAMPLES) ?: break
+                    record.read(buffer, 0, FRAME_SIZE_SAMPLES)
                 } catch (e: Throwable) {
                     Log.e(TAG, "Microphone read failed", e)
                     break
@@ -193,16 +193,16 @@ class AudioBridge(
             }
             _isCapturing.value = false
             _isLocalVoiceActive.value = false
-            val finishedRecord = audioRecord
-            audioRecord = null
-            noiseSuppressor?.release()
-            noiseSuppressor = null
+            // Release only the local handle. The audioRecord/noiseSuppressor
+            // fields belong to startCapture/stopCapture on the caller thread,
+            // so this late cleanup can never clear or double-release a
+            // replacement instance from a quick stop→start cycle.
             try {
-                finishedRecord?.stop()
+                record.stop()
             } catch (_: Throwable) {
             }
             try {
-                finishedRecord?.release()
+                record.release()
             } catch (_: Throwable) {
             }
         }
