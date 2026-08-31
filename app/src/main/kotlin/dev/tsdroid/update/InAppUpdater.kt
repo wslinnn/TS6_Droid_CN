@@ -23,7 +23,12 @@ object InAppUpdater {
         val state: DownloadState = DownloadState.IDLE,
         val progress: Float = 0f,
         val error: String? = null,
-    )
+    ) {
+        companion object {
+            /** Sentinel for "total size unknown" (chunked transfer). */
+            const val UNKNOWN_PROGRESS = -1f
+        }
+    }
 
     suspend fun downloadAndInstall(
         context: Context,
@@ -42,7 +47,9 @@ object InAppUpdater {
             conn.connectTimeout = 15000
             conn.readTimeout = 60000
 
-            val totalSize = conn.contentLength.toLong().coerceAtLeast(1)
+            // contentLength is -1 when the server streams chunked; only
+            // report progress when the total size is actually known
+            val totalSize = conn.contentLengthLong
             var downloaded = 0L
 
             conn.inputStream.use { input ->
@@ -52,7 +59,11 @@ object InAppUpdater {
                     while (input.read(buffer).also { bytesRead = it } != -1) {
                         output.write(buffer, 0, bytesRead)
                         downloaded += bytesRead
-                        val progress = (downloaded.toFloat() / totalSize).coerceIn(0f, 1f)
+                        val progress = if (totalSize > 0) {
+                            (downloaded.toFloat() / totalSize).coerceIn(0f, 1f)
+                        } else {
+                            DownloadProgress.UNKNOWN_PROGRESS
+                        }
                         onProgress(DownloadProgress(DownloadState.DOWNLOADING, progress))
                     }
                 }

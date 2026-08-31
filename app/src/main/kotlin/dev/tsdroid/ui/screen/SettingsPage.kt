@@ -560,9 +560,18 @@ private fun UpdateCheckRow(context: Context) {
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     if (isDownloading) {
-                        Text("${stringResource(R.string.update_downloading)} ${(downloadProgress * 100).toInt()}%", style = MaterialTheme.typography.bodyMedium)
-                        Spacer(Modifier.height(8.dp))
-                        LinearProgressIndicator(progress = { downloadProgress }, modifier = Modifier.fillMaxWidth())
+                        if (downloadProgress >= 0f) {
+                            Text("${stringResource(R.string.update_downloading)} ${(downloadProgress * 100).toInt()}%", style = MaterialTheme.typography.bodyMedium)
+                            Spacer(Modifier.height(8.dp))
+                            LinearProgressIndicator(progress = { downloadProgress }, modifier = Modifier.fillMaxWidth())
+                        } else {
+                            // Total size unknown (chunked transfer) — indeterminate progress
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource(R.string.update_downloading), style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
                         downloadError?.let {
                             Spacer(Modifier.height(8.dp))
                             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)

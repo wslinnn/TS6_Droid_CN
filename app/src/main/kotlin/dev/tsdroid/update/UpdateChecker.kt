@@ -58,8 +58,17 @@ object UpdateChecker {
             val assets = obj.getJSONArray("assets")
             val downloadUrl: String
             val apkSize: Long
-            if (assets.length() > 0) {
-                val apkAsset = assets.getJSONObject(0)
+            // Pick the .apk asset explicitly — a release can also carry
+            // checksums or other files alongside the APK
+            var apkAsset: org.json.JSONObject? = null
+            for (i in 0 until assets.length()) {
+                val asset = assets.getJSONObject(i)
+                if (asset.optString("browser_download_url", "").endsWith(".apk", ignoreCase = true)) {
+                    apkAsset = asset
+                    break
+                }
+            }
+            if (apkAsset != null) {
                 downloadUrl = apkAsset.optString("browser_download_url", "")
                 apkSize = apkAsset.optLong("size", 0L)
             } else {
