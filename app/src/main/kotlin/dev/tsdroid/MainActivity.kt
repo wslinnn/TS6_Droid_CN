@@ -20,7 +20,6 @@ import dev.tsdroid.ui.component.AnimeWallpaperState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import android.content.Intent
 import android.provider.Settings
 import dev.tsdroid.service.TsConnectionService
 
@@ -73,9 +72,7 @@ class MainActivity : ComponentActivity() {
             }
             if (enableFloatingWindow) {
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-                    Log.w(TAG, "Overlay permission not granted, prompting user")
-                    val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName"))
-                    startActivity(intent)
+                    Log.w(TAG, "Overlay permission not granted; skipping floating window")
                 } else {
                     connectionViewModel.showFloatingWindow()
                 }
