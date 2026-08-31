@@ -28,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.produceState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +59,8 @@ import coil.compose.AsyncImage
 import dev.tslib.BBCode
 import dev.tsdroid.viewmodel.ChatMessage
 import dev.tsdroid.viewmodel.FileAttachment
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -112,8 +115,15 @@ fun MessageBubble(
 
     val linkColor = MaterialTheme.colorScheme.primary
     val codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest
-    val parsed = remember(message.text, linkColor, codeBackground, showLinkThumbnails) {
-        parseMessage(message.text, linkColor, codeBackground, showLinkThumbnails)
+    // BBCode/HTML/span parsing is too heavy for composition; run it off the
+    // main thread and show plain (truncated) text until it lands
+    val parsed by produceState(
+        initialValue = ParsedMessage(AnnotatedString(message.text.take(200)), imageUrls = emptyList()),
+        message.text, linkColor, codeBackground, showLinkThumbnails,
+    ) {
+        withContext(Dispatchers.Default) {
+            value = parseMessage(message.text, linkColor, codeBackground, showLinkThumbnails)
+        }
     }
 
     Card(
