@@ -139,7 +139,7 @@ fun ServerScreen(
     var messageText by remember { mutableStateOf("") }
     var pmTargetId by remember { mutableStateOf<Int?>(null) }
 
-    // Whisper (瀵嗚亰) state 鈥?read directly from WhisperManager
+    // Whisper (密聊) state — read directly from WhisperManager
     val whisperTargetNames = WhisperManager.whisperTargetNames
     val whisperFirstTargetName = whisperTargetNames.firstOrNull()
 
@@ -169,7 +169,7 @@ fun ServerScreen(
         onDispose {}
     }
 
-    // Navigate away on disconnect 鈥?one-shot via LaunchedEffect
+    // Navigate away on disconnect — one-shot via LaunchedEffect
     LaunchedEffect(connectionState) {
         if (connectionState == ConnectionState.DISCONNECTED) {
             onDisconnected()
@@ -327,12 +327,12 @@ fun ServerScreen(
                         )
                     }
 
-                    // Whisper (瀵嗚亰) indicator 鈥?shows active state, click to stop
+                    // Whisper (密聊) indicator — shows active state, click to stop
                     if (WhisperManager.isWhisperActive && whisperFirstTargetName != null) {
                         IconButton(onClick = { viewModel.toggleWhisper(WhisperManager.whisperTargets.first()) }) {
                             Icon(
                                 Icons.Default.Forum,
-                                contentDescription = "鍋滄瀵嗚亰",
+                                contentDescription = "停止密聊",
                                 tint = Color(0xFF4CAF50),
                             )
                         }
@@ -343,7 +343,7 @@ fun ServerScreen(
                         ) {
                             Icon(
                                 Icons.Default.Forum,
-                                contentDescription = "瀵嗚亰",
+                                contentDescription = "密聊",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                             )
                         }
@@ -367,7 +367,7 @@ fun ServerScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            // Channel tree 鈥?full screen
+            // Channel tree — full screen
             ChannelTree(
                 channels = channels,
                 users = users,
@@ -387,7 +387,7 @@ fun ServerScreen(
                     .padding(horizontal = 8.dp),
             )
 
-            // File manager 鈥?slides up from bottom, fills content area
+            // File manager — slides up from bottom, fills content area
             val fileManagerProgress by animateFloatAsState(
                 targetValue = if (fileManagerOpen) 0f else 1f,
                 animationSpec = tween(300),
@@ -427,7 +427,7 @@ fun ServerScreen(
                 }
             }
 
-            // Chat panel 鈥?slides up from bottom, fills content area
+            // Chat panel — slides up from bottom, fills content area
             // Once opened, stay composed so re-opening is instant (no recomposition)
             if (chatOpen) chatEverOpened = true
             val chatProgress by animateFloatAsState(
@@ -676,7 +676,7 @@ fun ChatPanel(
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            text = "瀵嗚亰 ${whisperTargetName}",
+                            text = "密聊 ${whisperTargetName}",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
@@ -722,7 +722,7 @@ fun ChatPanel(
                         Text(
                             when {
                                 isWhisperActive && whisperTargetName != null ->
-                                    "瀵嗚亰 ${whisperTargetName}..."
+                                    "密聊 ${whisperTargetName}..."
                                 chatTab == 0 -> stringResource(R.string.message_channel_placeholder)
                                 else -> stringResource(R.string.message_private_placeholder, pmTarget?.nickname ?: "?")
                             }
