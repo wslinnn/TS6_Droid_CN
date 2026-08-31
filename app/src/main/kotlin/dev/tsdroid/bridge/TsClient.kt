@@ -70,6 +70,14 @@ class TsClient {
     private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 64)
     val events: SharedFlow<Event> = _events.asSharedFlow()
 
+    // Chat messages get a replay buffer: the UI subscribes some time after
+    // startEventLoop() begins (navigation + first composition), and events
+    // emitted with no subscriber are dropped by a SharedFlow. Without replay
+    // those messages are lost forever. Audio/talk events stay replay-free —
+    // the service subscribes in onCreate before any connection exists.
+    private val _chatEvents = MutableSharedFlow<Event>(replay = 64, extraBufferCapacity = 16)
+    val chatEvents: SharedFlow<Event> = _chatEvents.asSharedFlow()
+
     private val _state = MutableStateFlow(ConnectionState.DISCONNECTED)
     val state: StateFlow<Int> = _state.asStateFlow()
 
@@ -238,7 +246,8 @@ class TsClient {
                         val c = client ?: break
                         val events = c.processEvents() ?: emptyArray()
                         for (event in events) {
-                            _events.tryEmit(event)
+                            if (event.type == "text_message") _chatEvents.tryEmit(event)
+                            else _events.tryEmit(event)
                             handleEvent(event)
                         }
                         refreshCounter++

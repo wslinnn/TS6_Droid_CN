@@ -301,6 +301,11 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             viewModelScope.launch {
                 service.tsClient.events.collect { handleEvent(it) }
             }
+            // Chat messages arrive on a replayed flow: events emitted between
+            // connection and this subscription are replayed instead of lost.
+            viewModelScope.launch {
+                service.tsClient.chatEvents.collect { handleEvent(it) }
+            }
             viewModelScope.launch {
                 service.tsClient.commandErrors.collect { message ->
                     withContext(Dispatchers.Main) {
