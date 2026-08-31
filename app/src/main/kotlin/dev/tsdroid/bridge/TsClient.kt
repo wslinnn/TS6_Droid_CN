@@ -245,14 +245,17 @@ class TsClient {
         eventLoopJob = clientCoroutineScope.launch {
             try {
                 var refreshCounter = 0
+                var lastEventAt = 0L
                 while (isActive && client != null) {
                     ensureActive()
                     try {
                         val c = client ?: break
                         val events = c.processEvents() ?: emptyArray()
+                        if (events.isNotEmpty()) lastEventAt = System.currentTimeMillis()
                         for (event in events) {
-                            if (event.type == "text_message") _chatEvents.tryEmit(event)
+                            val emitted = if (event.type == "text_message") _chatEvents.tryEmit(event)
                             else _events.tryEmit(event)
+                            if (!emitted) Log.w(TAG, "Event buffer overflow, dropped ${event.type}")
                             handleEvent(event)
                         }
                         refreshCounter++
@@ -269,7 +272,9 @@ class TsClient {
                         closeAfterNativeFailure()
                         break
                     }
-                    delay(20)
+                    // Poll fast right after activity; back off while idle so an
+                    // idle session doesn't burn CPU/battery at 50 wakeups/s
+                    delay(if (System.currentTimeMillis() - lastEventAt < 2000) 20 else 40)
                 }
             } catch (e: CancellationException) {
                 Log.d(TAG, "Event loop coroutine clean cancelled.")
