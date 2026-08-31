@@ -93,7 +93,8 @@ object UpdateChecker {
         }
     }
 
-    private fun isNewerVersion(current: String, latest: String): Boolean {
+    // internal so the unit tests can exercise the comparison directly
+    internal fun isNewerVersion(current: String, latest: String): Boolean {
         val currentClean = current.removeSuffix("-Han")
         val latestClean = latest.removeSuffix("-Han")
 

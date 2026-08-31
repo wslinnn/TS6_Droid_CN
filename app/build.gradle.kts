@@ -105,4 +105,12 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.coil.compose)
     debugImplementation(libs.androidx.ui.tooling)
+
+    testImplementation(libs.junit)
+}
+
+tasks.withType<Test>().configureEach {
+    // Non-ASCII project paths on Windows break class loading unless the
+    // test worker reads paths as UTF-8
+    jvmArgs("-Dfile.encoding=UTF-8")
 }
