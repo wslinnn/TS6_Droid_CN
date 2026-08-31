@@ -125,8 +125,7 @@ class TsClient {
                 val hadExistingClient = disconnectOnNativeThread()
                 
                 delay(if (hadExistingClient) RECONNECT_AFTER_DISCONNECT_DELAY_MS else INITIAL_CONNECT_SETTLE_MS)
-                
-                serverAddress = address
+
                 _state.value = ConnectionState.CONNECTING
 
                 var lastFailure: Throwable? = null
@@ -167,6 +166,7 @@ class TsClient {
 
                         client = c
                         pendingClient = null
+                        serverAddress = address
                         _state.value = ConnectionState.CONNECTED
                         refreshState()
                         if (client == null) {
