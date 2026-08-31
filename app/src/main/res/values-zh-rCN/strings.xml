@@ -23,6 +23,7 @@
     <string name="default_channel">默认频道</string>
     <string name="browse_channels">浏览频道</string>
     <string name="connecting">正在连接…</string>
+    <string name="reconnecting_hint">连接已断开，正在重连…</string>
     <string name="connect">连接</string>
     <string name="add_bookmark">添加服务器</string>
     <string name="add_server">添加服务器</string>

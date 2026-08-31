@@ -414,17 +414,19 @@ fun ServerScreen(
                 .padding(padding),
         ) {
             if (connectionState == ConnectionState.DISCONNECTED) {
+                // Auto-reconnect banner: neutral colors + explicit wording so it
+                // doesn't read as an error pill saying "connecting"
                 Surface(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .padding(top = 8.dp)
                         .clip(RoundedCornerShape(999.dp)),
-                    color = MaterialTheme.colorScheme.errorContainer,
+                    color = MaterialTheme.colorScheme.secondaryContainer,
                 ) {
                     Text(
-                        text = stringResource(R.string.connecting),
+                        text = stringResource(R.string.reconnecting_hint),
                         style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     )
                 }

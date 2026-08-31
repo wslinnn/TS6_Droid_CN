@@ -24,6 +24,7 @@
     <string name="default_channel">Channel par défaut</string>
     <string name="browse_channels">Parcourir les channels</string>
     <string name="connecting">Connexion\u2026</string>
+    <string name="reconnecting_hint">Connexion perdue — reconnexion\u2026</string>
     <string name="connect">Se connecter</string>
     <string name="add_bookmark">Ajouter un favori</string>
     <string name="add_server">Ajouter un serveur</string>

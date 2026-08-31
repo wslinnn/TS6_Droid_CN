@@ -19,6 +19,7 @@
     <string name="default_channel">Default channel</string>
     <string name="browse_channels">Browse channels</string>
     <string name="connecting">Connecting\u2026</string>
+    <string name="reconnecting_hint">Connection lost — reconnecting\u2026</string>
     <string name="connect">Connect</string>
     <string name="add_bookmark">Add bookmark</string>
     <string name="add_server">Add server</string>
