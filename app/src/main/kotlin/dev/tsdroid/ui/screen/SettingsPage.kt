@@ -55,7 +55,9 @@ fun SettingsPage(
     val settingsStore = remember { SettingsStore(context) }
     val showLinkThumbnails by settingsStore.showLinkThumbnails.collectAsStateWithLifecycle(initialValue = false)
     val autoLoadImages by settingsStore.autoLoadImages.collectAsStateWithLifecycle(initialValue = false)
-    val enableFloatingWindow by settingsStore.enableFloatingWindow.collectAsStateWithLifecycle(initialValue = false)
+    // Default matches AudioBridge/store default (enabled) so the switch
+    // doesn't flash off→on on first composition
+    val enableFloatingWindow by settingsStore.enableFloatingWindow.collectAsStateWithLifecycle(initialValue = true)
     val animeBackground by settingsStore.animeBackground.collectAsStateWithLifecycle(initialValue = true)
     val noiseSuppression by settingsStore.noiseSuppression.collectAsStateWithLifecycle(initialValue = true)
     val audioGain by settingsStore.audioGain.collectAsStateWithLifecycle(initialValue = 1.0f)
