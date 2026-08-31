@@ -93,6 +93,7 @@
     <string name="tap_to_view">Tap to view</string>
     <string name="tap_to_load_images">Tap to load images</string>
     <string name="retry">Retry</string>
+    <string name="file_too_large">File exceeds the 10 MB limit — upload cancelled</string>
     <string name="tap_to_open">Tap to open</string>
     <string name="download_not_supported">Download not supported</string>
     <string name="file_size_bytes">%1$d B</string>

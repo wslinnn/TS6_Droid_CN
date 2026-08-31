@@ -83,6 +83,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -106,7 +107,10 @@ import dev.tsdroid.viewmodel.ChatMessage
 import dev.tsdroid.viewmodel.DownloadState
 import dev.tsdroid.viewmodel.FileAttachment
 import dev.tsdroid.viewmodel.ServerViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import dev.tsdroid.service.WhisperManager
 
 /** Décision ⑦ : rappel « notifications désactivées » limité à une fois par processus. */
@@ -607,23 +611,44 @@ fun ChatPanel(
     whisperTargetName: String? = null,
 ) {
     val context = LocalContext.current
+    val uploadScope = rememberCoroutineScope()
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        try {
-            val cursor = context.contentResolver.query(uri, null, null, null, null)
-            val nameIndex = cursor?.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME) ?: -1
-            val sizeIndex = cursor?.getColumnIndex(android.provider.OpenableColumns.SIZE) ?: -1
-            cursor?.moveToFirst()
-            val fileName = if (nameIndex >= 0) cursor?.getString(nameIndex) ?: "file" else "file"
-            val fileSize = if (sizeIndex >= 0) cursor?.getLong(sizeIndex) ?: -1L else -1L
-            cursor?.close()
-            if (fileSize > 10_485_760) return@rememberLauncherForActivityResult // 10MB max
-            val data = context.contentResolver.openInputStream(uri)?.readBytes() ?: return@rememberLauncherForActivityResult
-            if (data.size > 10_485_760) return@rememberLauncherForActivityResult // 10MB max
-            onUploadFile(fileName, data)
-        } catch (_: Exception) {}
+        uploadScope.launch {
+            var fileName: String? = null
+            var data: ByteArray? = null
+            var tooLarge = false
+            // Reading (up to 10 MB) must not happen on the main thread
+            withContext(Dispatchers.IO) {
+                try {
+                    val cursor = context.contentResolver.query(uri, null, null, null, null)
+                    val nameIndex = cursor?.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME) ?: -1
+                    val sizeIndex = cursor?.getColumnIndex(android.provider.OpenableColumns.SIZE) ?: -1
+                    cursor?.moveToFirst()
+                    fileName = if (nameIndex >= 0) cursor?.getString(nameIndex) ?: "file" else "file"
+                    val fileSize = if (sizeIndex >= 0) cursor?.getLong(sizeIndex) ?: -1L else -1L
+                    cursor?.close()
+                    if (fileSize > 10_485_760) {
+                        tooLarge = true
+                        return@withContext
+                    }
+                    val bytes = context.contentResolver.openInputStream(uri)?.readBytes()
+                        ?: return@withContext
+                    if (bytes.size > 10_485_760) {
+                        tooLarge = true
+                    } else {
+                        data = bytes
+                    }
+                } catch (_: Exception) {
+                }
+            }
+            when {
+                data != null && fileName != null -> onUploadFile(fileName!!, data!!)
+                tooLarge -> Toast.makeText(context, R.string.file_too_large, Toast.LENGTH_SHORT).show()
+            }
+        }
     }
     Surface(
         modifier = Modifier.fillMaxSize(),

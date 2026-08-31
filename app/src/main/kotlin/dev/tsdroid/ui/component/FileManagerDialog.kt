@@ -2,6 +2,7 @@ package dev.tsdroid.ui.component
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,6 +50,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +65,9 @@ import dev.tslib.User
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 sealed class ShareTarget {
     data object Channel : ShareTarget()
@@ -104,24 +109,45 @@ fun FileManagerDialog(
     var shareTarget by remember { mutableStateOf<Pair<String, Long>?>(null) }
 
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        try {
-            val cursor = context.contentResolver.query(uri, null, null, null, null)
-            val nameIndex = cursor?.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME) ?: -1
-            val sizeIndex = cursor?.getColumnIndex(android.provider.OpenableColumns.SIZE) ?: -1
-            cursor?.moveToFirst()
-            val fileName = if (nameIndex >= 0) cursor?.getString(nameIndex) ?: "file" else "file"
-            val fileSize = if (sizeIndex >= 0) cursor?.getLong(sizeIndex) ?: -1L else -1L
-            cursor?.close()
-            if (fileSize > 10_485_760) return@rememberLauncherForActivityResult
-            val data = context.contentResolver.openInputStream(uri)?.readBytes()
-                ?: return@rememberLauncherForActivityResult
-            if (data.size > 10_485_760) return@rememberLauncherForActivityResult
-            onUploadFile(fileName, data)
-        } catch (_: Exception) {}
+        scope.launch {
+            var fileName: String? = null
+            var data: ByteArray? = null
+            var tooLarge = false
+            // Reading (up to 10 MB) must not happen on the main thread
+            withContext(Dispatchers.IO) {
+                try {
+                    val cursor = context.contentResolver.query(uri, null, null, null, null)
+                    val nameIndex = cursor?.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME) ?: -1
+                    val sizeIndex = cursor?.getColumnIndex(android.provider.OpenableColumns.SIZE) ?: -1
+                    cursor?.moveToFirst()
+                    fileName = if (nameIndex >= 0) cursor?.getString(nameIndex) ?: "file" else "file"
+                    val fileSize = if (sizeIndex >= 0) cursor?.getLong(sizeIndex) ?: -1L else -1L
+                    cursor?.close()
+                    if (fileSize > 10_485_760) {
+                        tooLarge = true
+                        return@withContext
+                    }
+                    val bytes = context.contentResolver.openInputStream(uri)?.readBytes()
+                        ?: return@withContext
+                    if (bytes.size > 10_485_760) {
+                        tooLarge = true
+                    } else {
+                        data = bytes
+                    }
+                } catch (_: Exception) {
+                }
+            }
+            when {
+                data != null && fileName != null -> onUploadFile(fileName!!, data!!)
+                tooLarge -> Toast.makeText(context, R.string.file_too_large, Toast.LENGTH_SHORT).show()
+                // else: unreadable content — previously silent, kept silent
+            }
+        }
     }
 
     // Sort: folders first, then files, alphabetically
