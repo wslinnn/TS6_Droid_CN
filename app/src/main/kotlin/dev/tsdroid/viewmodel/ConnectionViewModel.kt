@@ -190,20 +190,27 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
             try {
                 val identity = getOrCreateIdentity()
-                val pw = password.value.trim().takeIf { it.isNotEmpty() }
-                var connectionFailure = service.connect(addr, identity, nick, pw)
-                if (connectionFailure?.isTooManyClonesFailure() == true) {
-                    Log.w(TAG, "Too many clones for saved identity; retrying with a temporary identity")
-                    connectionFailure = service.connect(addr, getCloneBypassIdentity(), nick, pw)
-                }
+                try {
+                    val pw = password.value.trim().takeIf { it.isNotEmpty() }
+                    var connectionFailure = service.connect(addr, identity, nick, pw)
+                    if (connectionFailure?.isTooManyClonesFailure() == true) {
+                        Log.w(TAG, "Too many clones for saved identity; retrying with a temporary identity")
+                        connectionFailure = service.connect(addr, getCloneBypassIdentity(), nick, pw)
+                    }
 
-                if (connectionFailure == null) {
-                    _connectionState.value = ConnectionState.CONNECTED
-                    onConnected()
-                } else {
-                    _connectionState.value = ConnectionState.DISCONNECTED
-                    _error.value = connectionFailure.message
-                        ?: getApplication<Application>().getString(R.string.connection_failed)
+                    if (connectionFailure == null) {
+                        _connectionState.value = ConnectionState.CONNECTED
+                        onConnected()
+                    } else {
+                        _connectionState.value = ConnectionState.DISCONNECTED
+                        _error.value = connectionFailure.message
+                            ?: getApplication<Application>().getString(R.string.connection_failed)
+                    }
+                } finally {
+                    // reconnect() reloads the identity from disk, so this
+                    // native instance isn't needed once the connect attempts
+                    // are done
+                    identity.close()
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -470,6 +477,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 getApplication<Application>().unbindService(it)
             } catch (_: Exception) {}
         }
+        cloneBypassIdentity?.close()
+        cloneBypassIdentity = null
         super.onCleared()
     }
 }
