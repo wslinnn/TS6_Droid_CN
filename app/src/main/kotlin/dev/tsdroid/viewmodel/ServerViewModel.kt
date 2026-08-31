@@ -80,19 +80,29 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Own messages are echoed locally before the server confirms them; a
-     * command error right after a send most likely means the message was
-     * rejected (no talk power etc.), so the pending echo is rolled back.
+     * Own messages are echoed locally before the server confirms them. The
+     * server echo marks the pending entry confirmed (accepted), so a command
+     * error rolls back only still-unconfirmed echoes — failures of unrelated
+     * commands (channel moves etc.) can no longer delete an accepted message.
      */
-    private class PendingEcho(val target: String, val userId: Int?, val text: String, val at: Long)
+    private class PendingEcho(val target: String, val userId: Int?, val text: String, val at: Long) {
+        var confirmed = false
+    }
     private val pendingOwnEchoes = ArrayDeque<PendingEcho>()
+
+    private fun confirmPendingEcho(text: String) {
+        val idx = pendingOwnEchoes.indexOfFirst { !it.confirmed && it.text == text }
+        if (idx >= 0) pendingOwnEchoes[idx].confirmed = true
+    }
 
     private fun rollbackLastPendingEcho() {
         val now = System.currentTimeMillis()
         while (pendingOwnEchoes.isNotEmpty() && now - pendingOwnEchoes.first().at > PENDING_ECHO_WINDOW_MS) {
             pendingOwnEchoes.removeFirst()
         }
-        val pending = pendingOwnEchoes.removeFirstOrNull() ?: return
+        val idx = pendingOwnEchoes.indexOfFirst { !it.confirmed }
+        if (idx < 0) return
+        val pending = pendingOwnEchoes.removeAt(idx)
         if (pending.target == "channel") {
             val list = _channelMessages.value.toMutableList()
             val idx = list.indexOfFirst { it.isMe && it.text == pending.text && it.timestamp >= pending.at }
@@ -532,8 +542,12 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                         val safeText = if (text.length > 200) text.take(200) + "..." else text
                         Log.d(TAG, "Text message: target=$target sender=$sender text=$safeText")
 
-                        // Skip our own messages — we already added them locally
-                        if (myId != null && senderId == myId) return
+                        // Skip our own messages — we already added them locally.
+                        // The echo also proves the server accepted the send.
+                        if (myId != null && senderId == myId) {
+                            confirmPendingEcho(text)
+                            return
+                        }
 
                         // Safely parse file attachment with extra protection
                         val attachment = try {
