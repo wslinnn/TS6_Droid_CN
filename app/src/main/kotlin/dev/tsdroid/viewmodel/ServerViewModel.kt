@@ -170,8 +170,9 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     val privateMessages: StateFlow<Map<Int, List<ChatMessage>>> = _privateMessages.asStateFlow()
 
     // Separate PTT mode from actual mute state
-    private val _isPttMode = MutableStateFlow(true) // true = PTT, false = voice activity
-    val isPttMode: StateFlow<Boolean> = _isPttMode.asStateFlow()
+    /** true = push-to-talk (hold), false = voice activation; persisted. */
+    val isPttMode: StateFlow<Boolean> = settingsStore.pttMode
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     private val _isOutputMuted = MutableStateFlow(false)
     val isOutputMuted: StateFlow<Boolean> = _isOutputMuted.asStateFlow()
@@ -751,11 +752,23 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { settingsStore.setNoiseSuppression(enabled) }
     }
 
-    fun toggleVoiceMode() {
-        val newPttMode = !_isPttMode.value
-        _isPttMode.value = newPttMode
-        // When switching to PTT mode, mute. When switching to VA, unmute.
-        audioBridge?.setMuted(newPttMode)
+    /** Mute state to restore when a PTT press ends (overlay unmutes survive). */
+    private var prePttMicMuted = true
+
+    fun setPushToTalk(pressed: Boolean) {
+        val bridge = audioBridge ?: return
+        if (pressed) {
+            // PTT only overrides the mute while held
+            prePttMicMuted = bridge.isMuted.value
+            bridge.setMuted(false)
+        } else {
+            bridge.setMuted(prePttMicMuted)
+        }
+    }
+
+    /** Same switch as the floating window / notification: flips the real mute state. */
+    fun toggleMicMute() {
+        audioBridge?.toggleMute()
     }
 
     fun toggleOutputMute() {
@@ -770,11 +783,6 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         }
         _mutedUserIds.value = updated
         audioBridge?.setMutedUserIds(updated)
-    }
-
-    fun setPushToTalk(pressed: Boolean) {
-        // Only changes mute state, NOT isPttMode — avoids UI recomposition swap
-        audioBridge?.setMuted(!pressed)
     }
 
     private fun currentChannelId(): Long {

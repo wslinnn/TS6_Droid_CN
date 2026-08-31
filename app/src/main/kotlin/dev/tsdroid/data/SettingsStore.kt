@@ -18,6 +18,7 @@ private val KEY_LANGUAGE = stringPreferencesKey("language")
 private val KEY_ENABLE_FLOATING_WINDOW = booleanPreferencesKey("enable_floating_window")
 private val KEY_ANIME_BACKGROUND = booleanPreferencesKey("anime_background")
 private val KEY_NOISE_SUPPRESSION = booleanPreferencesKey("noise_suppression")
+private val KEY_PTT_MODE = booleanPreferencesKey("ptt_mode")
 
 class SettingsStore(private val context: Context) {
 
@@ -70,5 +71,13 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setNoiseSuppression(enabled: Boolean) {
         context.settingsDataStore.edit { it[KEY_NOISE_SUPPRESSION] = enabled }
+    }
+
+    /** true = push-to-talk (hold to talk), false = voice activation. */
+    val pttMode: Flow<Boolean> = context.settingsDataStore.data
+        .map { it[KEY_PTT_MODE] ?: true }
+
+    suspend fun setPttMode(enabled: Boolean) {
+        context.settingsDataStore.edit { it[KEY_PTT_MODE] = enabled }
     }
 }

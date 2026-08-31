@@ -60,6 +60,7 @@ fun SettingsPage(
     val enableFloatingWindow by settingsStore.enableFloatingWindow.collectAsStateWithLifecycle(initialValue = true)
     val animeBackground by settingsStore.animeBackground.collectAsStateWithLifecycle(initialValue = true)
     val noiseSuppression by settingsStore.noiseSuppression.collectAsStateWithLifecycle(initialValue = true)
+    val pttMode by settingsStore.pttMode.collectAsStateWithLifecycle(initialValue = true)
     val audioGain by settingsStore.audioGain.collectAsStateWithLifecycle(initialValue = 1.0f)
 
     val languageOptions = listOf(
@@ -234,6 +235,13 @@ fun SettingsPage(
                     label = stringResource(R.string.noise_suppression),
                     checked = noiseSuppression,
                     onCheckedChange = { scope.launch { settingsStore.setNoiseSuppression(it) } },
+                )
+
+                // 麦克风模式：开 = 按住说话（PTT），关 = 语音激活
+                SettingsSwitchRow(
+                    label = stringResource(R.string.push_to_talk),
+                    checked = pttMode,
+                    onCheckedChange = { scope.launch { settingsStore.setPttMode(it) } },
                 )
             }
         }

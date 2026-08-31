@@ -298,84 +298,58 @@ fun ServerScreen(
                         }
                     }
 
-                    // Center button: PTT or Mute depending on MODE (not mute state)
-                    if (isPttMode) {
-                        // PTT mode: hold to talk
-                        var isPressed by remember { mutableStateOf(false) }
-                        val pttBackground = if (isPressed) MaterialTheme.colorScheme.primaryContainer
-                            else MaterialTheme.colorScheme.surfaceVariant
-                        val pttTint = if (isPressed) MaterialTheme.colorScheme.onPrimaryContainer
-                            else MaterialTheme.colorScheme.onSurfaceVariant
-                        Box(
-                            modifier = Modifier
-                                .size(72.dp)
-                                .clip(CircleShape)
-                                .background(pttBackground)
-                                .pointerInput(Unit) {
-                                    detectTapGestures(
-                                        onPress = {
-                                            isPressed = true
-                                            viewModel.setPushToTalk(true)
-                                            tryAwaitRelease()
-                                            viewModel.setPushToTalk(false)
-                                            isPressed = false
-                                        },
-                                    )
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(
-                                    Icons.Default.Mic,
-                                    contentDescription = stringResource(R.string.push_to_talk),
-                                    modifier = Modifier.size(28.dp),
-                                    tint = pttTint,
-                                )
-                                Text(
-                                    stringResource(R.string.ptt),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = pttTint,
+                    // Center button: driven by the REAL mute state — the single
+                    // source of truth shared with the floating window and the
+                    // notification action. PTT mode: hold to talk (release
+                    // restores the previous state); voice activation: tap toggles.
+                    val centerBackground = if (isMicMuted) MaterialTheme.colorScheme.errorContainer
+                        else MaterialTheme.colorScheme.primaryContainer
+                    val centerTint = if (isMicMuted) MaterialTheme.colorScheme.onErrorContainer
+                        else MaterialTheme.colorScheme.onPrimaryContainer
+                    val centerModifier = if (isPttMode) {
+                        Modifier
+                            .size(72.dp)
+                            .clip(CircleShape)
+                            .background(centerBackground)
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onPress = {
+                                        viewModel.setPushToTalk(true)
+                                        tryAwaitRelease()
+                                        viewModel.setPushToTalk(false)
+                                    },
                                 )
                             }
-                        }
                     } else {
-                        // Voice activity mode: click to mute and go back to PTT
-                        Box(
-                            modifier = Modifier
-                                .size(72.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.errorContainer)
-                                .clickable { viewModel.toggleVoiceMode() },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(
-                                    Icons.Default.MicOff,
-                                    contentDescription = stringResource(R.string.mute_mic),
-                                    modifier = Modifier.size(28.dp),
-                                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                                )
-                                Text(
-                                    stringResource(R.string.mute),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                )
-                            }
+                        Modifier
+                            .size(72.dp)
+                            .clip(CircleShape)
+                            .background(centerBackground)
+                            .clickable { viewModel.toggleMicMute() }
+                    }
+                    Box(
+                        modifier = centerModifier,
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                if (isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                                contentDescription = stringResource(if (isMicMuted) R.string.unmute_mic else R.string.mute_mic),
+                                modifier = Modifier.size(28.dp),
+                                tint = centerTint,
+                            )
+                            Text(
+                                stringResource(
+                                    if (isPttMode) R.string.ptt
+                                    else if (isMicMuted) R.string.unmute_mic
+                                    else R.string.mute_mic
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = centerTint,
+                            )
                         }
                     }
 
-                    // Toggle voice mode (PTT 鈫?Voice Activity)
-                    IconButton(onClick = { viewModel.toggleVoiceMode() }) {
-                        Icon(
-                            // Real mute state (mirrored from AudioBridge), so a
-                            // toggle from the floating window is reflected here too;
-                            // the click itself still switches PTT/Voice-Activity
-                            if (isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                            contentDescription = stringResource(if (isMicMuted) R.string.unmute_mic else R.string.mute_mic),
-                            tint = if (isMicMuted) MaterialTheme.colorScheme.error
-                            else MaterialTheme.colorScheme.primary,
-                        )
-                    }
 
                     // Whisper (密聊) indicator — shows active state, click to stop
                     if (WhisperManager.isWhisperActive && whisperFirstTargetName != null) {
