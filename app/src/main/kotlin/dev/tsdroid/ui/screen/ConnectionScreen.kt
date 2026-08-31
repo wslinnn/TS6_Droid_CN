@@ -2,6 +2,7 @@ package dev.tsdroid.ui.screen
 
 import android.Manifest
 import android.os.Build
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -89,7 +90,12 @@ import kotlinx.coroutines.launch
 fun ConnectionScreen(
     onConnected: () -> Unit,
     onNavigateToAbout: () -> Unit,
-    viewModel: ConnectionViewModel = viewModel(),
+    // Share the activity-scoped instance that MainActivity keeps for its onStop
+    // overlay check — a nav-scoped duplicate would collect every flow and decode
+    // all bookmark icons a second time
+    viewModel: ConnectionViewModel = viewModel(
+        viewModelStoreOwner = LocalContext.current as ComponentActivity
+    ),
 ) {
     val address by viewModel.address.collectAsStateWithLifecycle()
     val nickname by viewModel.nickname.collectAsStateWithLifecycle()
