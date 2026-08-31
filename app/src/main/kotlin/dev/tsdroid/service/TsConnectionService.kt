@@ -620,7 +620,9 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                     onToggleMic = { audioBridge.toggleMute() },
                     onToggleOutput = { audioBridge.toggleOutputMute() },
                     onChannelClick = { channelId -> tsClient.moveToChannel(channelId) },
-                    onClose = { hideFloatingWindow() }
+                    // Décision ④ : the red exit icon really disconnects (service
+                    // stop + session end), it no longer just hides the panel
+                    onClose = { disconnect() }
                 )
             }
         }
