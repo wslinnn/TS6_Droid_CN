@@ -960,12 +960,19 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         refreshFileList()
     }
 
+    /** Native file ops are fire-and-forget: refresh shortly after, then once
+     *  more in case the server was slow applying the change. */
+    private fun refreshFileListAfterOperation() {
+        refreshFileListAfterOperation()
+        viewModelScope.launch { delay(2000); refreshFileList() }
+    }
+
     fun deleteFileInChannel(name: String) {
         val client = tsClient ?: return
         val channelId = currentChannelId()
         val fullPath = _currentFilePath.value + name
         client.deleteFile(channelId, fullPath)
-        viewModelScope.launch { delay(500); refreshFileList() }
+        refreshFileListAfterOperation()
     }
 
     fun renameFileInChannel(oldName: String, newName: String) {
@@ -973,7 +980,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         val channelId = currentChannelId()
         val currentPath = _currentFilePath.value
         client.renameFile(channelId, currentPath + oldName, currentPath + newName)
-        viewModelScope.launch { delay(500); refreshFileList() }
+        refreshFileListAfterOperation()
     }
 
     fun createDirectoryInChannel(dirName: String) {
@@ -987,7 +994,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         } catch (e: Exception) {
             Log.e(TAG, "createDirectory failed", e)
         }
-        viewModelScope.launch { delay(500); refreshFileList() }
+        refreshFileListAfterOperation()
     }
 
     fun shareFile(targetUserId: Int?, fileName: String, fileSize: Long) {
@@ -1101,8 +1108,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             val success = client.uploadFile(channelId, path, data, overwrite = true)
             if (success) {
-                delay(500)
-                refreshFileList()
+                refreshFileListAfterOperation()
             }
         }
     }
