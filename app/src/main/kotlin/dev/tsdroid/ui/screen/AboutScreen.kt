@@ -37,7 +37,7 @@ private data class GitHubContributor(
 @Composable
 fun AboutScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val repoUrl = "https://github.com/YUAXI/TS6_Droid_CN"
+    val repoUrl = "https://github.com/wslinnn/TS6_Droid_CN"
     val scrollState = rememberScrollState()
     val settingsStore = remember { SettingsStore(context) }
     val animeBackground by settingsStore.animeBackground.collectAsStateWithLifecycle(initialValue = true)
@@ -50,7 +50,7 @@ fun AboutScreen(onBack: () -> Unit) {
         isLoadingContributors = true
         withContext(Dispatchers.IO) {
             try {
-                val url = URL("https://api.github.com/repos/YUAXI/TS6_Droid_CN/contributors")
+                val url = URL("https://api.github.com/repos/wslinnn/TS6_Droid_CN/contributors")
                 val conn = url.openConnection()
                 conn.connectTimeout = 10000
                 conn.readTimeout = 10000
