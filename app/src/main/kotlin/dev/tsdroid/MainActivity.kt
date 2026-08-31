@@ -65,20 +65,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        if (isChangingConfigurations) return
+        // Read the setting from the ViewModel's cached state — no disk I/O
+        // on the main thread while the activity is stopping
+        if (!connectionViewModel.enableFloatingWindow.value) {
+            Log.d(TAG, "onStop: floating window is disabled in settings")
+            return
+        }
         Log.d(TAG, "onStop: showing floating window")
-        if (!isChangingConfigurations) {
-            val enableFloatingWindow = runBlocking(Dispatchers.IO) {
-                SettingsStore(this@MainActivity).enableFloatingWindow.first()
-            }
-            if (enableFloatingWindow) {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-                    Log.w(TAG, "Overlay permission not granted; skipping floating window")
-                } else {
-                    connectionViewModel.showFloatingWindow()
-                }
-            } else {
-                Log.d(TAG, "Floating window is disabled in settings")
-            }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            Log.w(TAG, "Overlay permission not granted; skipping floating window")
+        } else {
+            connectionViewModel.showFloatingWindow()
         }
     }
 }

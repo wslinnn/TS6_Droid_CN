@@ -19,6 +19,7 @@ import dev.tsdroid.bridge.nicknameWithCollisionSuffix
 import dev.tsdroid.han.R
 import dev.tsdroid.data.BookmarkStore
 import dev.tsdroid.data.ServerBookmark
+import dev.tsdroid.data.SettingsStore
 import dev.tsdroid.service.TsConnectionService
 import dev.tslib.Channel
 import dev.tslib.ChannelTree
@@ -46,12 +47,17 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private val bookmarkStore = BookmarkStore(application)
+    private val settingsStore = SettingsStore(application)
 
     val bookmarks: StateFlow<List<ServerBookmark>> = bookmarkStore.bookmarks
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val autoReconnect: StateFlow<Boolean> = bookmarkStore.autoReconnect
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** Read by MainActivity.onStop without blocking the main thread. */
+    val enableFloatingWindow: StateFlow<Boolean> = settingsStore.enableFloatingWindow
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     val address = MutableStateFlow("")
     val nickname = MutableStateFlow("")
