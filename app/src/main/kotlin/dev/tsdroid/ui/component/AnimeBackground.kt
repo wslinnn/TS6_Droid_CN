@@ -22,6 +22,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageResult
 import coil.request.SuccessResult
 import dev.tsdroid.background.CustomBackgroundManager
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -34,7 +35,13 @@ object AnimeWallpaperState {
     val customBitmap = mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
     val dominantColor = mutableStateOf<Color?>(null)
     private var fetched = false
-    private val bgScope = CoroutineScope(Dispatchers.IO)
+    // No parent job to propagate to: an unexpected decode failure must be
+    // logged, not crash the process via the default uncaught handler
+    private val bgScope = CoroutineScope(
+        Dispatchers.IO + CoroutineExceptionHandler { _, e ->
+            android.util.Log.w("AnimeWallpaperState", "Custom background decode failed", e)
+        },
+    )
 
     suspend fun ensureFetched(context: Context) {
         if (fetched) return
