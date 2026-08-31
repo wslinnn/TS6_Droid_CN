@@ -29,7 +29,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -103,6 +102,7 @@ fun ConnectionScreen(
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val overlayDialogVisible by viewModel.overlayDialogVisible.collectAsStateWithLifecycle()
+    val firstServerHint by viewModel.firstServerHint.collectAsStateWithLifecycle()
     val browsedChannels by viewModel.browsedChannels.collectAsStateWithLifecycle()
     val isBrowsing by viewModel.isBrowsing.collectAsStateWithLifecycle()
     val showChannelPicker by viewModel.showChannelPicker.collectAsStateWithLifecycle()
@@ -141,6 +141,14 @@ fun ConnectionScreen(
         error?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.clearError()
+        }
+    }
+
+    // Décision ⑧ : guidance affichée une seule fois après le tout premier favori ajouté
+    LaunchedEffect(firstServerHint) {
+        firstServerHint?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.consumeFirstServerHint()
         }
     }
 
@@ -189,7 +197,7 @@ fun ConnectionScreen(
             floatingActionButton = {
                 if (selectedTab == 0) {
                     FloatingActionButton(onClick = { showBottomSheet = true }) {
-                        Icon(Icons.Default.Add, contentDescription = stringResource(R.string.manual_connection))
+                        Icon(Icons.Default.Add, contentDescription = stringResource(R.string.add_server))
                     }
                 }
             },
@@ -425,7 +433,7 @@ fun ConnectionScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Text(
-                            stringResource(if (isEditing) R.string.edit_bookmark else R.string.manual_connection),
+                            stringResource(if (isEditing) R.string.edit_bookmark else R.string.add_server),
                             style = MaterialTheme.typography.titleLarge,
                         )
 
@@ -488,42 +496,17 @@ fun ConnectionScreen(
                             colors = glassTextFieldColors,
                         )
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Button(
-                                onClick = {
-                                    scope.launch {
-                                        sheetState.hide()
-                                        showBottomSheet = false
-                                    }
-                                    viewModel.connect(onConnected)
-                                },
-                                modifier = Modifier.weight(1f),
-                                enabled = !isConnecting,
-                            ) {
-                                if (isConnecting) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.height(20.dp).width(20.dp),
-                                        strokeWidth = 2.dp,
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                }
-                                Text(stringResource(if (isConnecting) R.string.connecting else R.string.connect))
-                            }
-
-                            FilledTonalButton(onClick = {
+                        FilledTonalButton(
+                            onClick = {
                                 viewModel.saveBookmark()
                                 scope.launch {
                                     sheetState.hide()
                                     showBottomSheet = false
                                 }
-                            }) {
-                                Icon(Icons.Default.Star, contentDescription = null)
-                                Spacer(Modifier.width(4.dp))
-                                Text(stringResource(if (isEditing) R.string.save else R.string.add_bookmark))
-                            }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(stringResource(if (isEditing) R.string.save else R.string.add_server))
                         }
 
                         Spacer(Modifier.height(16.dp))

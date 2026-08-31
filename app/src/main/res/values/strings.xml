@@ -26,6 +26,8 @@
     <string name="connecting">Connexion\u2026</string>
     <string name="connect">Se connecter</string>
     <string name="add_bookmark">Ajouter un favori</string>
+    <string name="add_server">Ajouter un serveur</string>
+    <string name="first_server_hint">Serveur ajouté — appuyez sur Connecter pour démarrer</string>
     <string name="edit_bookmark">Modifier le favori</string>
     <string name="save">Enregistrer</string>
     <string name="bookmarks">Favoris</string>

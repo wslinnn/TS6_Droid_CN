@@ -123,6 +123,10 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     /** Réglages système ouverts ; seule la reprise qui suit déclenche la revérification. */
     private var awaitingOverlayGrant = false
 
+    /** Décision ⑧ : Snackbar affiché une seule fois après l'ajout du tout premier favori. */
+    private val _firstServerHint = MutableStateFlow<String?>(null)
+    val firstServerHint: StateFlow<String?> = _firstServerHint.asStateFlow()
+
     private var serviceConnection: ServiceConnection? = null
     private var connectJob: kotlinx.coroutines.Job? = null
     private var cloneBypassIdentity: Identity? = null
@@ -162,7 +166,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         )
     }
 
-    fun connect(onConnected: () -> Unit) {
+    private fun connect(onConnected: () -> Unit) {
         val input = getValidatedConnectionInput() ?: return
         val addr = input.address
         val nick = input.nickname
@@ -368,6 +372,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         val addr = address.value.trim()
         val nick = nickname.value.trim()
         if (addr.isEmpty()) return
+        val adding = _editingIndex.value < 0
         val bookmark = ServerBookmark(
             name = addr.substringBefore(":"),
             address = addr,
@@ -381,9 +386,17 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 bookmarkStore.replace(idx, bookmark)
             } else {
                 bookmarkStore.add(bookmark)
+                if (bookmarks.value.isEmpty()) {
+                    _firstServerHint.value =
+                        getApplication<Application>().getString(R.string.first_server_hint)
+                }
             }
             clearFields()
         }
+    }
+
+    fun consumeFirstServerHint() {
+        _firstServerHint.value = null
     }
 
     fun removeBookmark(index: Int) {

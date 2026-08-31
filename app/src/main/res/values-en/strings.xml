@@ -21,6 +21,8 @@
     <string name="connecting">Connecting\u2026</string>
     <string name="connect">Connect</string>
     <string name="add_bookmark">Add bookmark</string>
+    <string name="add_server">Add server</string>
+    <string name="first_server_hint">Server added — tap Connect on the card to start</string>
     <string name="bookmarks">Bookmarks</string>
     <string name="remove">Remove</string>
     <string name="select_channel">Select channel</string>
