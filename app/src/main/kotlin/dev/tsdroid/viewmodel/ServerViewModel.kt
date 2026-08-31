@@ -327,6 +327,18 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             if (!service.audioBridge.isCapturing.value) {
                 service.audioBridge.startCapture(viewModelScope, noiseSuppression.value)
             }
+            // Restart capture when the noise suppression setting changes so
+            // the toggle takes effect in the current session
+            viewModelScope.launch {
+                var applied = noiseSuppression.value
+                settingsStore.noiseSuppression.collect { enabled ->
+                    if (enabled != applied && service.audioBridge.isCapturing.value) {
+                        service.audioBridge.stopCapture()
+                        service.audioBridge.startCapture(viewModelScope, enabled)
+                    }
+                    applied = enabled
+                }
+            }
             // Apply persisted audio gain
             service.audioBridge.gainFactor = audioGain.value
             // Observe audio gain changes and apply live

@@ -59,6 +59,7 @@ import dev.tsdroid.bridge.AudioBridge
 import dev.tsdroid.bridge.AvatarCache
 import dev.tsdroid.bridge.TsClient
 import dev.tsdroid.bridge.WhisperBridge
+import dev.tsdroid.data.SettingsStore
 import dev.tslib.Identity
 import dev.tslib.Channel
 import dev.tslib.User
@@ -69,6 +70,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -426,7 +428,10 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         isIntentionalDisconnect = false
         return try {
             tsClient.connect(address, identity, nickname, password)
-            audioBridge.startCapture(serviceScope)
+            audioBridge.startCapture(
+                serviceScope,
+                SettingsStore(applicationContext).noiseSuppression.first(),
+            )
             // Sync initial mute state with server
             if (audioBridge.isMuted.value) {
                 tsClient.setInputMuted(true)
