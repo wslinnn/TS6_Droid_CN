@@ -22,7 +22,9 @@ import coil.compose.AsyncImage
 import coil.request.ImageResult
 import coil.request.SuccessResult
 import dev.tsdroid.background.CustomBackgroundManager
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
@@ -32,27 +34,43 @@ object AnimeWallpaperState {
     val customBitmap = mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
     val dominantColor = mutableStateOf<Color?>(null)
     private var fetched = false
+    private val bgScope = CoroutineScope(Dispatchers.IO)
 
     suspend fun ensureFetched(context: Context) {
         if (fetched) return
         fetched = true
         WallpaperCacheManager.init(context)
+        // Check existence synchronously: the decode below is async, so
+        // customBitmap may still be null on the next line
+        val hasCustom = CustomBackgroundManager.getActiveBackground(context) != null
         refreshCustomBackground(context)
-        if (customBitmap.value == null) {
+        if (!hasCustom) {
             fetchOnlineWallpaper(context)
         }
     }
 
     fun refreshCustomBackground(context: Context) {
         val customFile = CustomBackgroundManager.getActiveBackground(context)
-        if (customFile != null) {
-            val bm = BitmapFactory.decodeFile(customFile.absolutePath)
-            if (bm != null) {
-                customBitmap.value = bm.asImageBitmap()
-                extractColorFromBitmap(bm)
-            }
-        } else {
+        if (customFile == null) {
             customBitmap.value = null
+            return
+        }
+        // A full-screen bitmap decode is too heavy for the caller's (main)
+        // thread — decode off-main and downsample to about the display size
+        bgScope.launch {
+            val metrics = context.resources.displayMetrics
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(customFile.absolutePath, bounds)
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= metrics.widthPixels &&
+                bounds.outHeight / (sample * 2) >= metrics.heightPixels
+            ) sample *= 2
+            val bm = BitmapFactory.decodeFile(
+                customFile.absolutePath,
+                BitmapFactory.Options().apply { inSampleSize = sample },
+            ) ?: return@launch
+            customBitmap.value = bm.asImageBitmap()
+            extractColorFromBitmap(bm)
         }
     }
 
