@@ -170,8 +170,11 @@ fun AnimeBackground(enabled: Boolean) {
             .fillMaxSize()
             .alpha(0.75f)
     ) {
+        LaunchedEffect(customBmp) {
+            if (customBmp != null) imageLoaded = true
+        }
+
         if (customBmp != null) {
-            imageLoaded = true
             androidx.compose.foundation.Image(
                 bitmap = customBmp,
                 contentDescription = null,

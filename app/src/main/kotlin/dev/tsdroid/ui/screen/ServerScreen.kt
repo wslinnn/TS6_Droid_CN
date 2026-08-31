@@ -503,7 +503,9 @@ fun ServerScreen(
 
             // Chat panel — slides up from bottom, fills content area
             // Once opened, stay composed so re-opening is instant (no recomposition)
-            if (chatOpen) chatEverOpened = true
+            LaunchedEffect(chatOpen) {
+                if (chatOpen) chatEverOpened = true
+            }
             val chatProgress by animateFloatAsState(
                 targetValue = if (chatOpen) 0f else 1f,
                 animationSpec = tween(300),

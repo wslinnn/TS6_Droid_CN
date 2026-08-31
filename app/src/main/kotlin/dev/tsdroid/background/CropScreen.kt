@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.tsdroid.han.R
@@ -97,6 +98,12 @@ fun CropScreen(
                 Canvas(
                     modifier = Modifier
                         .fillMaxSize()
+                        // Canvas size feeds the crop-rect maths; measuring here
+                        // instead of writing state inside the draw scope
+                        .onSizeChanged { size ->
+                            imageWidth = size.width.toFloat()
+                            imageHeight = size.height.toFloat()
+                        }
                         .pointerInput(Unit) {
                             detectTransformGestures { _, pan, zoom, _ ->
                                 if (zoom == 1f) {
@@ -121,8 +128,6 @@ fun CropScreen(
                             }
                         }
                 ) {
-                    imageWidth = size.width
-                    imageHeight = size.height
                     if (cropW <= 0f) return@Canvas
 
                     drawImage(imageBitmap, dstSize = androidx.compose.ui.unit.IntSize(size.width.roundToInt(), size.height.roundToInt()))
