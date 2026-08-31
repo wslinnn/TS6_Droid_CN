@@ -19,12 +19,19 @@ android {
     }
 
     signingConfigs {
-        if (file("${rootDir}/release.keystore").exists()) {
+        // Release signing comes from environment variables (see the release
+        // workflow) — no passwords live in this repository. Without them the
+        // build falls back to the debug key, so local development is unaffected.
+        val keystoreFile = file(System.getenv("SIGNING_KEYSTORE_FILE") ?: "${rootDir}/release.keystore")
+        val storePass = System.getenv("SIGNING_STORE_PASSWORD")
+        val keyAliasName = System.getenv("SIGNING_KEY_ALIAS")
+        val keyPass = System.getenv("SIGNING_KEY_PASSWORD")
+        if (keystoreFile.exists() && storePass != null && keyAliasName != null && keyPass != null) {
             create("release") {
-                storeFile = file("${rootDir}/release.keystore")
-                storePassword = "ts6droid"
-                keyAlias = "ts6droid"
-                keyPassword = "ts6droid"
+                storeFile = keystoreFile
+                storePassword = storePass
+                keyAlias = keyAliasName
+                keyPassword = keyPass
             }
         }
     }
