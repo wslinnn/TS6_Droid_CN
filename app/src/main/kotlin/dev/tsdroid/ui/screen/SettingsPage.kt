@@ -61,16 +61,6 @@ fun SettingsPage(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val settingsStore = remember { SettingsStore(context) }
-    val showLinkThumbnails by settingsStore.showLinkThumbnails.collectAsStateWithLifecycle(initialValue = false)
-    val autoLoadImages by settingsStore.autoLoadImages.collectAsStateWithLifecycle(initialValue = false)
-    // Default matches AudioBridge/store default (enabled) so the switch
-    // doesn't flash off→on on first composition
-    val enableFloatingWindow by settingsStore.enableFloatingWindow.collectAsStateWithLifecycle(initialValue = true)
-    val animeBackground by settingsStore.animeBackground.collectAsStateWithLifecycle(initialValue = false)
-    val noiseSuppression by settingsStore.noiseSuppression.collectAsStateWithLifecycle(initialValue = true)
-    val micMode by settingsStore.micMode.collectAsStateWithLifecycle(initialValue = MicMode.PTT)
-    val vadThreshold by settingsStore.vadThresholdDb.collectAsStateWithLifecycle(initialValue = VadGate.DEFAULT_THRESHOLD_DB)
-    val audioGain by settingsStore.audioGain.collectAsStateWithLifecycle(initialValue = 1.0f)
 
     val languageOptions = listOf(
         "zh" to stringResource(R.string.language_simplified_chinese),
@@ -83,10 +73,6 @@ fun SettingsPage(
     var languageMenuExpanded by remember { mutableStateOf(false) }
     var pendingLanguageTag by remember { mutableStateOf<String?>(null) }
     val activity = context as? Activity
-
-    // 悬浮窗开关的权限引导（决议①）：开启且无权限时先引导授权，授权成功才真正持久化为开
-    var showOverlayPermissionDialog by remember { mutableStateOf(false) }
-    var awaitingOverlayGrant by remember { mutableStateOf(false) }
 
     pendingLanguageTag?.let { languageTag ->
         val label = languageOptions.firstOrNull { it.first == languageTag }?.second ?: languageTag
@@ -112,56 +98,6 @@ fun SettingsPage(
                 }
             },
         )
-    }
-
-    // 悬浮窗开关的权限引导（决议①）：说明对话框只有「去开启权限」单选路径
-    if (showOverlayPermissionDialog) {
-        AlertDialog(
-            onDismissRequest = {
-                showOverlayPermissionDialog = false
-                awaitingOverlayGrant = false
-            },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            title = { Text(stringResource(R.string.overlay_permission_title)) },
-            text = { Text(stringResource(R.string.overlay_permission_message)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    try {
-                        context.startActivity(
-                            Intent(
-                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:${context.packageName}"),
-                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                        awaitingOverlayGrant = true
-                    } catch (_: Exception) {
-                        showOverlayPermissionDialog = false
-                        awaitingOverlayGrant = false
-                    }
-                }) {
-                    Text(stringResource(R.string.overlay_permission_next))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showOverlayPermissionDialog = false
-                    awaitingOverlayGrant = false
-                }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-    }
-
-    // 从系统设置返回：已授权才把开关真正持久化为开；未授权/取消则维持关
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        if (awaitingOverlayGrant) {
-            awaitingOverlayGrant = false
-            showOverlayPermissionDialog = false
-            if (Settings.canDrawOverlays(context)) {
-                scope.launch { settingsStore.setEnableFloatingWindow(true) }
-            }
-        }
     }
 
     // ── 身份导出/导入 ──
@@ -223,135 +159,12 @@ fun SettingsPage(
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
         // ── 外观 ──
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)),
-            shape = MaterialTheme.shapes.large,
-        ) {
-            Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                SettingsSectionTitle(stringResource(R.string.section_appearance))
-
-                // 悬浮窗
-                SettingsSwitchRow(
-                    label = stringResource(R.string.enable_floating_window),
-                    checked = enableFloatingWindow,
-                    onCheckedChange = { checked ->
-                        if (checked && !Settings.canDrawOverlays(context)) {
-                            // 决议①：无权限时先引导授权，授权返回后开关才保持开；
-                            // 取消或未授权则不写入，开关回退为关
-                            showOverlayPermissionDialog = true
-                        } else {
-                            scope.launch { settingsStore.setEnableFloatingWindow(checked) }
-                        }
-                    },
-                )
-
-                // 动漫背景
-                SettingsSwitchRow(
-                    label = stringResource(R.string.anime_background),
-                    checked = animeBackground,
-                    onCheckedChange = { scope.launch { settingsStore.setAnimeBackground(it) } },
-                )
-
-                if (animeBackground) {
-                    // 自定义背景
-                    CustomBackgroundSection(context)
-
-                    // 壁纸缓存
-                    WallpaperCacheSection(context)
-                }
-            }
-        }
+        AppearanceSection()
 
         Spacer(Modifier.height(12.dp))
 
         // ── 音频 ──
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)),
-            shape = MaterialTheme.shapes.large,
-        ) {
-            Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                SettingsSectionTitle(stringResource(R.string.section_audio))
-
-                // 音量增益
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                    var gainValue by remember(audioGain) { mutableFloatStateOf(audioGain) }
-                    Text(
-                        text = "${stringResource(R.string.audio_gain)} : ${stringResource(R.string.audio_gain_value, gainValue)}",
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Slider(
-                        value = gainValue,
-                        onValueChange = { gainValue = it },
-                        onValueChangeFinished = { scope.launch { settingsStore.setAudioGain(gainValue) } },
-                        valueRange = 1.0f..8.0f,
-                        steps = 13,
-                    )
-                }
-
-                // 麦克风降噪
-                SettingsSwitchRow(
-                    label = stringResource(R.string.noise_suppression),
-                    checked = noiseSuppression,
-                    onCheckedChange = { scope.launch { settingsStore.setNoiseSuppression(it) } },
-                )
-
-                // 麦克风模式：按住说话 / 语音激活 / 开放麦克风
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                    Text(
-                        text = stringResource(R.string.mic_mode),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        FilterChip(
-                            selected = micMode == MicMode.PTT,
-                            onClick = { scope.launch { settingsStore.setMicMode(MicMode.PTT) } },
-                            label = { Text(stringResource(R.string.push_to_talk)) },
-                        )
-                        FilterChip(
-                            selected = micMode == MicMode.VAD,
-                            onClick = { scope.launch { settingsStore.setMicMode(MicMode.VAD) } },
-                            label = { Text(stringResource(R.string.mic_mode_vad)) },
-                        )
-                        FilterChip(
-                            selected = micMode == MicMode.OPEN,
-                            onClick = { scope.launch { settingsStore.setMicMode(MicMode.OPEN) } },
-                            label = { Text(stringResource(R.string.mic_mode_open)) },
-                        )
-                    }
-                    if (micMode == MicMode.VAD) {
-                        var thresholdValue by remember(vadThreshold) { mutableFloatStateOf(vadThreshold) }
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = stringResource(R.string.vad_threshold, thresholdValue.roundToInt()),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        Slider(
-                            value = thresholdValue,
-                            onValueChange = { thresholdValue = it },
-                            onValueChangeFinished = {
-                                scope.launch { settingsStore.setVadThresholdDb(thresholdValue) }
-                            },
-                            valueRange = -70f..-15f,
-                            steps = 54,
-                        )
-                        Text(
-                            text = stringResource(R.string.vad_threshold_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-        }
+        AudioSection()
 
         Spacer(Modifier.height(12.dp))
 
@@ -394,31 +207,10 @@ fun SettingsPage(
         Spacer(Modifier.height(12.dp))
 
         // ── 聊天 ──
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)),
-            shape = MaterialTheme.shapes.large,
-        ) {
-            Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                SettingsSectionTitle(stringResource(R.string.section_chat))
-
-                SettingsSwitchRow(
-                    label = stringResource(R.string.auto_reconnect),
-                    checked = autoReconnect,
-                    onCheckedChange = onAutoReconnectChange,
-                )
-                SettingsSwitchRow(
-                    label = stringResource(R.string.show_link_thumbnails),
-                    checked = showLinkThumbnails,
-                    onCheckedChange = { scope.launch { settingsStore.setShowLinkThumbnails(it) } },
-                )
-                SettingsSwitchRow(
-                    label = stringResource(R.string.auto_load_images),
-                    checked = autoLoadImages,
-                    onCheckedChange = { scope.launch { settingsStore.setAutoLoadImages(it) } },
-                )
-            }
-        }
+        ChatSection(
+            autoReconnect = autoReconnect,
+            onAutoReconnectChange = onAutoReconnectChange,
+        )
 
         Spacer(Modifier.height(12.dp))
 
@@ -486,6 +278,249 @@ fun SettingsPage(
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f), MaterialTheme.shapes.large)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         )
+    }
+}
+
+// ── 分区卡片：连接前设置页与通话中设置面板（ServerSettingsPanel）共用 ──
+
+@Composable
+fun AppearanceSection() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val settingsStore = remember { SettingsStore(context) }
+    // Default matches AudioBridge/store default (enabled) so the switch
+    // doesn't flash off→on on first composition
+    val enableFloatingWindow by settingsStore.enableFloatingWindow.collectAsStateWithLifecycle(initialValue = true)
+    val animeBackground by settingsStore.animeBackground.collectAsStateWithLifecycle(initialValue = false)
+
+    // 悬浮窗开关的权限引导（决议①）：开启且无权限时先引导授权，授权成功才真正持久化为开
+    var showOverlayPermissionDialog by remember { mutableStateOf(false) }
+    var awaitingOverlayGrant by remember { mutableStateOf(false) }
+
+    // 悬浮窗开关的权限引导（决议①）：说明对话框只有「去开启权限」单选路径
+    if (showOverlayPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showOverlayPermissionDialog = false
+                awaitingOverlayGrant = false
+            },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            title = { Text(stringResource(R.string.overlay_permission_title)) },
+            text = { Text(stringResource(R.string.overlay_permission_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    try {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:${context.packageName}"),
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                        awaitingOverlayGrant = true
+                    } catch (_: Exception) {
+                        showOverlayPermissionDialog = false
+                        awaitingOverlayGrant = false
+                    }
+                }) {
+                    Text(stringResource(R.string.overlay_permission_next))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showOverlayPermissionDialog = false
+                    awaitingOverlayGrant = false
+                }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
+    // 从系统设置返回：已授权才把开关真正持久化为开；未授权/取消则维持关
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        if (awaitingOverlayGrant) {
+            awaitingOverlayGrant = false
+            showOverlayPermissionDialog = false
+            if (Settings.canDrawOverlays(context)) {
+                scope.launch { settingsStore.setEnableFloatingWindow(true) }
+            }
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)),
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+            SettingsSectionTitle(stringResource(R.string.section_appearance))
+
+            // 悬浮窗
+            SettingsSwitchRow(
+                label = stringResource(R.string.enable_floating_window),
+                checked = enableFloatingWindow,
+                onCheckedChange = { checked ->
+                    if (checked && !Settings.canDrawOverlays(context)) {
+                        // 决议①：无权限时先引导授权，授权返回后开关才保持开；
+                        // 取消或未授权则不写入，开关回退为关
+                        showOverlayPermissionDialog = true
+                    } else {
+                        scope.launch { settingsStore.setEnableFloatingWindow(checked) }
+                    }
+                },
+            )
+
+            // 动漫背景
+            SettingsSwitchRow(
+                label = stringResource(R.string.anime_background),
+                checked = animeBackground,
+                onCheckedChange = { scope.launch { settingsStore.setAnimeBackground(it) } },
+            )
+
+            if (animeBackground) {
+                // 自定义背景
+                CustomBackgroundSection(context)
+
+                // 壁纸缓存
+                WallpaperCacheSection(context)
+            }
+        }
+    }
+}
+
+@Composable
+fun AudioSection() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val settingsStore = remember { SettingsStore(context) }
+    val noiseSuppression by settingsStore.noiseSuppression.collectAsStateWithLifecycle(initialValue = true)
+    val micMode by settingsStore.micMode.collectAsStateWithLifecycle(initialValue = MicMode.PTT)
+    val vadThreshold by settingsStore.vadThresholdDb.collectAsStateWithLifecycle(initialValue = VadGate.DEFAULT_THRESHOLD_DB)
+    val audioGain by settingsStore.audioGain.collectAsStateWithLifecycle(initialValue = 1.0f)
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)),
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+            SettingsSectionTitle(stringResource(R.string.section_audio))
+
+            // 音量增益
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                var gainValue by remember(audioGain) { mutableFloatStateOf(audioGain) }
+                Text(
+                    text = "${stringResource(R.string.audio_gain)} : ${stringResource(R.string.audio_gain_value, gainValue)}",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Spacer(Modifier.height(4.dp))
+                Slider(
+                    value = gainValue,
+                    onValueChange = { gainValue = it },
+                    onValueChangeFinished = { scope.launch { settingsStore.setAudioGain(gainValue) } },
+                    valueRange = 1.0f..8.0f,
+                    steps = 13,
+                )
+            }
+
+            // 麦克风降噪
+            SettingsSwitchRow(
+                label = stringResource(R.string.noise_suppression),
+                checked = noiseSuppression,
+                onCheckedChange = { scope.launch { settingsStore.setNoiseSuppression(it) } },
+            )
+
+            // 麦克风模式：按住说话 / 语音激活 / 开放麦克风
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                Text(
+                    text = stringResource(R.string.mic_mode),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = micMode == MicMode.PTT,
+                        onClick = { scope.launch { settingsStore.setMicMode(MicMode.PTT) } },
+                        label = { Text(stringResource(R.string.push_to_talk)) },
+                    )
+                    FilterChip(
+                        selected = micMode == MicMode.VAD,
+                        onClick = { scope.launch { settingsStore.setMicMode(MicMode.VAD) } },
+                        label = { Text(stringResource(R.string.mic_mode_vad)) },
+                    )
+                    FilterChip(
+                        selected = micMode == MicMode.OPEN,
+                        onClick = { scope.launch { settingsStore.setMicMode(MicMode.OPEN) } },
+                        label = { Text(stringResource(R.string.mic_mode_open)) },
+                    )
+                }
+                if (micMode == MicMode.VAD) {
+                    var thresholdValue by remember(vadThreshold) { mutableFloatStateOf(vadThreshold) }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.vad_threshold, thresholdValue.roundToInt()),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Slider(
+                        value = thresholdValue,
+                        onValueChange = { thresholdValue = it },
+                        onValueChangeFinished = {
+                            scope.launch { settingsStore.setVadThresholdDb(thresholdValue) }
+                        },
+                        valueRange = -70f..-15f,
+                        steps = 54,
+                    )
+                    Text(
+                        text = stringResource(R.string.vad_threshold_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ChatSection(
+    autoReconnect: Boolean,
+    onAutoReconnectChange: (Boolean) -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val settingsStore = remember { SettingsStore(context) }
+    val showLinkThumbnails by settingsStore.showLinkThumbnails.collectAsStateWithLifecycle(initialValue = false)
+    val autoLoadImages by settingsStore.autoLoadImages.collectAsStateWithLifecycle(initialValue = false)
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)),
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+            SettingsSectionTitle(stringResource(R.string.section_chat))
+
+            SettingsSwitchRow(
+                label = stringResource(R.string.auto_reconnect),
+                checked = autoReconnect,
+                onCheckedChange = onAutoReconnectChange,
+            )
+            SettingsSwitchRow(
+                label = stringResource(R.string.show_link_thumbnails),
+                checked = showLinkThumbnails,
+                onCheckedChange = { scope.launch { settingsStore.setShowLinkThumbnails(it) } },
+            )
+            SettingsSwitchRow(
+                label = stringResource(R.string.auto_load_images),
+                checked = autoLoadImages,
+                onCheckedChange = { scope.launch { settingsStore.setAutoLoadImages(it) } },
+            )
+        }
     }
 }
 

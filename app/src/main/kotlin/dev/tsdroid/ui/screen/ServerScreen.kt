@@ -160,6 +160,7 @@ fun ServerScreen(
 
     var chatOpen by remember { mutableStateOf(false) }
     var chatEverOpened by remember { mutableStateOf(false) }
+    var settingsOpen by remember { mutableStateOf(false) }
     var chatTab by remember { mutableIntStateOf(0) }
     var messageText by remember { mutableStateOf("") }
     var pmTargetId by remember { mutableStateOf<Int?>(null) }
@@ -190,10 +191,11 @@ fun ServerScreen(
     }
 
     // System back closes the top-most overlay instead of leaving the app
-    BackHandler(enabled = chatOpen || fileManagerOpen) {
+    BackHandler(enabled = chatOpen || fileManagerOpen || settingsOpen) {
         when {
             chatOpen -> chatOpen = false
             fileManagerOpen -> viewModel.toggleFileManager()
+            settingsOpen -> settingsOpen = false
         }
     }
 
@@ -266,9 +268,23 @@ fun ServerScreen(
                         val opening = !fileManagerOpen
                         viewModel.toggleFileManager()
                         // Full-screen panels overlap — keep them exclusive
-                        if (opening) chatOpen = false
+                        if (opening) {
+                            chatOpen = false
+                            settingsOpen = false
+                        }
                     }) {
                         Icon(Icons.Default.Folder, contentDescription = stringResource(R.string.file_manager))
+                    }
+                    IconButton(onClick = {
+                        val opening = !settingsOpen
+                        settingsOpen = opening
+                        // Full-screen panels overlap — keep them exclusive
+                        if (opening) {
+                            chatOpen = false
+                            if (fileManagerOpen) viewModel.toggleFileManager()
+                        }
+                    }) {
+                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.tab_settings))
                     }
                     IconButton(onClick = { viewModel.disconnect() }) {
                         Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = stringResource(R.string.disconnect))
@@ -297,6 +313,7 @@ fun ServerScreen(
                         IconButton(onClick = {
                             val opening = !chatOpen
                             chatOpen = !chatOpen
+                            if (opening) settingsOpen = false
                             if (opening && fileManagerOpen) viewModel.toggleFileManager()
                         }) {
                             Icon(
@@ -557,6 +574,22 @@ fun ServerScreen(
                         isWhisperActive = WhisperManager.isWhisperActive,
                         whisperTargetName = whisperFirstTargetName,
                     )
+                }
+            }
+
+            // Settings panel — slides up from bottom, fills content area
+            val settingsProgress by animateFloatAsState(
+                targetValue = if (settingsOpen) 0f else 1f,
+                animationSpec = tween(300),
+                label = "settings",
+            )
+            if (settingsOpen || settingsProgress < 1f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { translationY = size.height * settingsProgress },
+                ) {
+                    ServerSettingsPanel(onClose = { settingsOpen = false })
                 }
             }
         }
