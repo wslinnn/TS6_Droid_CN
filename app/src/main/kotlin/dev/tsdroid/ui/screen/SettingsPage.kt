@@ -39,13 +39,16 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import coil.compose.AsyncImage
+import dev.tsdroid.bridge.IdentityFileStore
 import dev.tsdroid.bridge.MicMode
 import dev.tsdroid.bridge.VadGate
 import dev.tsdroid.data.SettingsStore
 import dev.tsdroid.han.R
 import dev.tsdroid.ui.component.SettingsCacheSizeHelper
 import dev.tsdroid.ui.component.WallpaperCacheManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 @Composable
@@ -156,6 +159,58 @@ fun SettingsPage(
             showOverlayPermissionDialog = false
             if (Settings.canDrawOverlays(context)) {
                 scope.launch { settingsStore.setEnableFloatingWindow(true) }
+            }
+        }
+    }
+
+    // ── 身份导出/导入 ──
+    val identityStore = remember { IdentityFileStore(context) }
+    var identityUid by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        identityUid = withContext(Dispatchers.IO) { identityStore.readUniqueId() }
+    }
+    val exportIdentityLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            identityStore.exportTo(out)
+                        } ?: false
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
+                Toast.makeText(
+                    context,
+                    if (ok) R.string.identity_export_success else R.string.identity_export_failed,
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
+    val importIdentityLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            identityStore.importFrom(input)
+                        } ?: false
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
+                if (ok) {
+                    identityUid = withContext(Dispatchers.IO) { identityStore.readUniqueId() }
+                    Toast.makeText(context, R.string.identity_import_success, Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(context, R.string.identity_import_failed, Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -293,6 +348,44 @@ fun SettingsPage(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // ── 身份 ──
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)),
+            shape = MaterialTheme.shapes.large,
+        ) {
+            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                SettingsSectionTitle(stringResource(R.string.identity_section))
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    Text(
+                        text = identityUid?.let { stringResource(R.string.identity_uid, it) }
+                            ?: stringResource(R.string.identity_uid_none),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        OutlinedButton(
+                            onClick = { exportIdentityLauncher.launch("ts6mobile_identity.ini") },
+                            enabled = identityUid != null,
+                        ) {
+                            Text(stringResource(R.string.identity_export))
+                        }
+                        OutlinedButton(onClick = { importIdentityLauncher.launch(arrayOf("*/*")) }) {
+                            Text(stringResource(R.string.identity_import))
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(R.string.identity_warning),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

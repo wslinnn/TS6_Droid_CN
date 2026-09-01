@@ -102,6 +102,16 @@
     <string name="server_channels">频道数</string>
     <string name="server_uptime">运行时长</string>
     <string name="server_welcome">欢迎消息</string>
+    <string name="identity_section">身份</string>
+    <string name="identity_uid">身份 UID：%1$s</string>
+    <string name="identity_uid_none">尚未生成（首次连接服务器后自动创建）</string>
+    <string name="identity_export">导出</string>
+    <string name="identity_import">导入</string>
+    <string name="identity_export_success">身份已导出</string>
+    <string name="identity_export_failed">导出失败：尚无身份文件</string>
+    <string name="identity_import_success">导入成功，下次连接生效</string>
+    <string name="identity_import_failed">导入失败：无效的身份文件</string>
+    <string name="identity_warning">身份等同账号凭据：导入会切换服务器身份，导出的文件请妥善保管。</string>
     <string name="section_chat">聊天</string>
     <string name="section_more">更多</string>
     <string name="update_check">点击检查更新</string>

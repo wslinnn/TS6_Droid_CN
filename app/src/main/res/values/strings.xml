@@ -103,6 +103,16 @@
     <string name="server_channels">Salons</string>
     <string name="server_uptime">Disponibilité</string>
     <string name="server_welcome">Message de bienvenue</string>
+    <string name="identity_section">Identité</string>
+    <string name="identity_uid">UID de l\'identité : %1$s</string>
+    <string name="identity_uid_none">Pas encore générée (créée à la première connexion)</string>
+    <string name="identity_export">Exporter</string>
+    <string name="identity_import">Importer</string>
+    <string name="identity_export_success">Identité exportée</string>
+    <string name="identity_export_failed">Échec de l\'export : aucune identité</string>
+    <string name="identity_import_success">Importé ; effectif à la prochaine connexion</string>
+    <string name="identity_import_failed">Échec de l\'import : fichier d\'identité invalide</string>
+    <string name="identity_warning">L\'identité est votre identifiant de compte : l\'importer change votre identité sur les serveurs, et le fichier exporté doit être conservé en sécurité.</string>
     <string name="section_chat">Chat</string>
     <string name="section_more">Plus</string>
     <string name="update_check">Vérifier les mises à jour</string>

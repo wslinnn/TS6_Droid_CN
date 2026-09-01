@@ -103,6 +103,16 @@
     <string name="server_channels">Channels</string>
     <string name="server_uptime">Uptime</string>
     <string name="server_welcome">Welcome message</string>
+    <string name="identity_section">Identity</string>
+    <string name="identity_uid">Identity UID: %1$s</string>
+    <string name="identity_uid_none">Not created yet (generated on first connection)</string>
+    <string name="identity_export">Export</string>
+    <string name="identity_import">Import</string>
+    <string name="identity_export_success">Identity exported</string>
+    <string name="identity_export_failed">Export failed: no identity yet</string>
+    <string name="identity_import_success">Imported; takes effect on next connection</string>
+    <string name="identity_import_failed">Import failed: invalid identity file</string>
+    <string name="identity_warning">Your identity is your account credential: importing switches your server identity, and the exported file should be kept safe.</string>
     <string name="section_chat">Chat</string>
     <string name="section_more">More</string>
     <string name="update_check">Check for updates</string>
