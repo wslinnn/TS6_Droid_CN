@@ -12,8 +12,8 @@ android {
         applicationId = "com.wslinnn.ts6mobile"
         minSdk = 29
         targetSdk = 35
-        versionCode = 14
-        versionName = "2.3.1-Han"
+        versionCode = 15
+        versionName = "2.4.0-Han"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -43,15 +43,28 @@ android {
             }
         }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // arm64 keeps the APK small — x86_64 is emulator-only, and multi-APK
+            // splits would break UpdateChecker (it expects exactly one .apk asset)
+            ndk {
+                abiFilters += "arm64-v8a"
+            }
             if (signingConfigs.names.contains("release")) {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
+    }
+
+    lint {
+        // False positive with R8 enabled: lint cannot resolve the androidx
+        // superclass chain (ComponentActivity / LifecycleService) in the
+        // minified release variant and flags manifest components
+        disable += "Instantiatable"
     }
 
     compileOptions {
