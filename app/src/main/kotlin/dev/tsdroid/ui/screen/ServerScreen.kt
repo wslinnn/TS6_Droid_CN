@@ -97,6 +97,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.tsdroid.han.R
+import dev.tsdroid.bridge.MicMode
 import dev.tslib.ConnectionState
 import dev.tslib.User
 import dev.tsdroid.ui.component.AnimeBackground
@@ -132,6 +133,7 @@ fun ServerScreen(
     val channelMessages by viewModel.channelMessages.collectAsStateWithLifecycle()
     val privateMessages by viewModel.privateMessages.collectAsStateWithLifecycle()
     val isPttMode by viewModel.isPttMode.collectAsStateWithLifecycle()
+    val micMode by viewModel.micMode.collectAsStateWithLifecycle()
     val isOutputMuted by viewModel.isOutputMuted.collectAsStateWithLifecycle()
     val isMicMuted by viewModel.isMicMuted.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
@@ -347,6 +349,7 @@ fun ServerScreen(
                                 stringResource(
                                     if (isPttMode) R.string.ptt
                                     else if (isMicMuted) R.string.unmute_mic
+                                    else if (micMode == MicMode.VAD) R.string.mic_mode_vad
                                     else R.string.mute_mic
                                 ),
                                 style = MaterialTheme.typography.labelSmall,

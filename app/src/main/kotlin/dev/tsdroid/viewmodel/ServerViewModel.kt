@@ -21,8 +21,10 @@ import dev.tsdroid.bridge.AvatarCache
 import dev.tsdroid.bridge.AudioBridge
 import dev.tsdroid.bridge.FileCache
 import dev.tsdroid.bridge.IconCache
+import dev.tsdroid.bridge.MicMode
 import dev.tsdroid.bridge.TsClient
 import dev.tsdroid.bridge.TsFileEntry
+import dev.tsdroid.bridge.VadGate
 import dev.tsdroid.han.R
 import dev.tsdroid.data.BookmarkStore
 import dev.tsdroid.data.MessageStore
@@ -42,6 +44,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -180,8 +183,15 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     val privateMessages: StateFlow<Map<Int, List<ChatMessage>>> = _privateMessages.asStateFlow()
 
     // Separate PTT mode from actual mute state
-    /** true = push-to-talk (hold), false = voice activation; persisted. */
-    val isPttMode: StateFlow<Boolean> = settingsStore.pttMode
+    val micMode: StateFlow<MicMode> = settingsStore.micMode
+        .stateIn(viewModelScope, SharingStarted.Eagerly, MicMode.PTT)
+
+    val vadThresholdDb: StateFlow<Float> = settingsStore.vadThresholdDb
+        .stateIn(viewModelScope, SharingStarted.Eagerly, VadGate.DEFAULT_THRESHOLD_DB)
+
+    /** true = push-to-talk (hold), false = tap to toggle. */
+    val isPttMode: StateFlow<Boolean> = micMode
+        .map { it == MicMode.PTT }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     private val _isOutputMuted = MutableStateFlow(false)
@@ -338,6 +348,14 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             tsClient = service.tsClient
             audioBridge = service.audioBridge
             audioBridge?.setMutedUserIds(_mutedUserIds.value)
+            audioBridge?.setMicMode(micMode.value)
+            audioBridge?.setVadThresholdDb(vadThresholdDb.value)
+            viewModelScope.launch {
+                settingsStore.micMode.collect { audioBridge?.setMicMode(it) }
+            }
+            viewModelScope.launch {
+                settingsStore.vadThresholdDb.collect { audioBridge?.setVadThresholdDb(it) }
+            }
             connectionService = service
             queriedPermChannels.clear()
 

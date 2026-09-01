@@ -82,6 +82,11 @@
     <string name="crop_hint">Glissez le cadre blanc pour sélectionner la zone</string>
     <string name="section_appearance">Apparence</string>
     <string name="section_audio">Audio</string>
+    <string name="mic_mode">Mode du micro</string>
+    <string name="mic_mode_vad">Activation vocale</string>
+    <string name="mic_mode_open">Micro ouvert</string>
+    <string name="vad_threshold">Seuil de déclenchement : %1$d dB</string>
+    <string name="vad_threshold_hint">Les niveaux au-dessus du seuil déclenchent la transmission. -45 dB convient à la plupart des environnements.</string>
     <string name="section_chat">Chat</string>
     <string name="section_more">Plus</string>
     <string name="update_check">Vérifier les mises à jour</string>

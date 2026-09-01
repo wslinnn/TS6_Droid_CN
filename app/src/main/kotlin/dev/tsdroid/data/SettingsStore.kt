@@ -6,6 +6,8 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import dev.tsdroid.bridge.MicMode
+import dev.tsdroid.bridge.VadGate
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -18,7 +20,10 @@ private val KEY_LANGUAGE = stringPreferencesKey("language")
 private val KEY_ENABLE_FLOATING_WINDOW = booleanPreferencesKey("enable_floating_window")
 private val KEY_ANIME_BACKGROUND = booleanPreferencesKey("anime_background")
 private val KEY_NOISE_SUPPRESSION = booleanPreferencesKey("noise_suppression")
+// Legacy key: kept only to migrate pre-2.3 installs to KEY_MIC_MODE
 private val KEY_PTT_MODE = booleanPreferencesKey("ptt_mode")
+private val KEY_MIC_MODE = stringPreferencesKey("mic_mode")
+private val KEY_VAD_THRESHOLD_DB = floatPreferencesKey("vad_threshold_db")
 
 class SettingsStore(private val context: Context) {
 
@@ -74,11 +79,27 @@ class SettingsStore(private val context: Context) {
         context.settingsDataStore.edit { it[KEY_NOISE_SUPPRESSION] = enabled }
     }
 
-    /** true = push-to-talk (hold to talk), false = voice activation. */
-    val pttMode: Flow<Boolean> = context.settingsDataStore.data
-        .map { it[KEY_PTT_MODE] ?: true }
+    /**
+     * Microphone mode. Migrates the legacy boolean: true was push-to-talk;
+     * false was an ungated open microphone (the old UI mislabeled it
+     * "voice activation", but mapping it to VAD would silence users after
+     * upgrade, so it maps to OPEN to keep behavior unchanged).
+     */
+    val micMode: Flow<MicMode> = context.settingsDataStore.data
+        .map { prefs ->
+            prefs[KEY_MIC_MODE]?.let { MicMode.from(it) }
+                ?: if (prefs[KEY_PTT_MODE] ?: true) MicMode.PTT else MicMode.OPEN
+        }
 
-    suspend fun setPttMode(enabled: Boolean) {
-        context.settingsDataStore.edit { it[KEY_PTT_MODE] = enabled }
+    suspend fun setMicMode(mode: MicMode) {
+        context.settingsDataStore.edit { it[KEY_MIC_MODE] = mode.toRaw() }
+    }
+
+    /** VAD activation threshold in dBFS. */
+    val vadThresholdDb: Flow<Float> = context.settingsDataStore.data
+        .map { it[KEY_VAD_THRESHOLD_DB] ?: VadGate.DEFAULT_THRESHOLD_DB }
+
+    suspend fun setVadThresholdDb(db: Float) {
+        context.settingsDataStore.edit { it[KEY_VAD_THRESHOLD_DB] = db }
     }
 }

@@ -82,6 +82,11 @@
     <string name="crop_hint">Drag the white frame to select the area</string>
     <string name="section_appearance">Appearance</string>
     <string name="section_audio">Audio</string>
+    <string name="mic_mode">Microphone mode</string>
+    <string name="mic_mode_vad">Voice activation</string>
+    <string name="mic_mode_open">Open microphone</string>
+    <string name="vad_threshold">Trigger threshold: %1$d dB</string>
+    <string name="vad_threshold_hint">Audio above the threshold is transmitted. -45 dB suits most environments.</string>
     <string name="section_chat">Chat</string>
     <string name="section_more">More</string>
     <string name="update_check">Check for updates</string>

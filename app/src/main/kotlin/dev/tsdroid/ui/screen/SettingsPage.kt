@@ -12,6 +12,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -38,11 +39,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import coil.compose.AsyncImage
+import dev.tsdroid.bridge.MicMode
+import dev.tsdroid.bridge.VadGate
 import dev.tsdroid.data.SettingsStore
 import dev.tsdroid.han.R
 import dev.tsdroid.ui.component.SettingsCacheSizeHelper
 import dev.tsdroid.ui.component.WallpaperCacheManager
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @Composable
 fun SettingsPage(
@@ -60,7 +64,8 @@ fun SettingsPage(
     val enableFloatingWindow by settingsStore.enableFloatingWindow.collectAsStateWithLifecycle(initialValue = true)
     val animeBackground by settingsStore.animeBackground.collectAsStateWithLifecycle(initialValue = false)
     val noiseSuppression by settingsStore.noiseSuppression.collectAsStateWithLifecycle(initialValue = true)
-    val pttMode by settingsStore.pttMode.collectAsStateWithLifecycle(initialValue = true)
+    val micMode by settingsStore.micMode.collectAsStateWithLifecycle(initialValue = MicMode.PTT)
+    val vadThreshold by settingsStore.vadThresholdDb.collectAsStateWithLifecycle(initialValue = VadGate.DEFAULT_THRESHOLD_DB)
     val audioGain by settingsStore.audioGain.collectAsStateWithLifecycle(initialValue = 1.0f)
 
     val languageOptions = listOf(
@@ -237,12 +242,58 @@ fun SettingsPage(
                     onCheckedChange = { scope.launch { settingsStore.setNoiseSuppression(it) } },
                 )
 
-                // 麦克风模式：开 = 按住说话（PTT），关 = 语音激活
-                SettingsSwitchRow(
-                    label = stringResource(R.string.push_to_talk),
-                    checked = pttMode,
-                    onCheckedChange = { scope.launch { settingsStore.setPttMode(it) } },
-                )
+                // 麦克风模式：按住说话 / 语音激活 / 开放麦克风
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    Text(
+                        text = stringResource(R.string.mic_mode),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            selected = micMode == MicMode.PTT,
+                            onClick = { scope.launch { settingsStore.setMicMode(MicMode.PTT) } },
+                            label = { Text(stringResource(R.string.push_to_talk)) },
+                        )
+                        FilterChip(
+                            selected = micMode == MicMode.VAD,
+                            onClick = { scope.launch { settingsStore.setMicMode(MicMode.VAD) } },
+                            label = { Text(stringResource(R.string.mic_mode_vad)) },
+                        )
+                        FilterChip(
+                            selected = micMode == MicMode.OPEN,
+                            onClick = { scope.launch { settingsStore.setMicMode(MicMode.OPEN) } },
+                            label = { Text(stringResource(R.string.mic_mode_open)) },
+                        )
+                    }
+                    if (micMode == MicMode.VAD) {
+                        var thresholdValue by remember(vadThreshold) { mutableFloatStateOf(vadThreshold) }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.vad_threshold, thresholdValue.roundToInt()),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Slider(
+                            value = thresholdValue,
+                            onValueChange = { thresholdValue = it },
+                            onValueChangeFinished = {
+                                scope.launch { settingsStore.setVadThresholdDb(thresholdValue) }
+                            },
+                            valueRange = -70f..-15f,
+                            steps = 54,
+                        )
+                        Text(
+                            text = stringResource(R.string.vad_threshold_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         }
 

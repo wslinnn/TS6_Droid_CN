@@ -81,6 +81,11 @@
     <string name="crop_hint">拖动白色方框选择保留区域</string>
     <string name="section_appearance">外观</string>
     <string name="section_audio">音频</string>
+    <string name="mic_mode">麦克风模式</string>
+    <string name="mic_mode_vad">语音激活</string>
+    <string name="mic_mode_open">开放麦克风</string>
+    <string name="vad_threshold">触发阈值：%1$d dB</string>
+    <string name="vad_threshold_hint">说话声高于阈值时自动发送。-45 dB 适合大多数环境。</string>
     <string name="section_chat">聊天</string>
     <string name="section_more">更多</string>
     <string name="update_check">点击检查更新</string>

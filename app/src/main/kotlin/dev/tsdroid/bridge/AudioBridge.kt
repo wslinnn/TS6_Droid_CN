@@ -69,6 +69,25 @@ class AudioBridge(
     var gainFactor: Float = 1.0f
 
     @Volatile
+    var micMode: MicMode = MicMode.PTT
+        private set
+
+    @Volatile
+    var vadThresholdDb: Float = VadGate.DEFAULT_THRESHOLD_DB
+        private set
+
+    private val vadGate = VadGate()
+
+    fun setMicMode(mode: MicMode) {
+        micMode = mode
+        vadGate.reset()
+    }
+
+    fun setVadThresholdDb(db: Float) {
+        vadThresholdDb = db
+    }
+
+    @Volatile
     private var mutedUserIds: Set<Int> = emptySet()
 
     private val _isMuted = MutableStateFlow(true) // Start muted (PTT default)
@@ -174,20 +193,35 @@ class AudioBridge(
                     break
                 }
                 if (read == FRAME_SIZE_SAMPLES && !_isMuted.value) {
-                    var energy = 0L
-                    for (i in 0 until read) {
-                        energy += buffer[i].toLong() * buffer[i].toLong()
+                    if (micMode == MicMode.VAD) {
+                        // Gate transmission on the voice-activation state machine
+                        vadGate.openThresholdDb = vadThresholdDb
+                        val toSend = vadGate.process(buffer, System.currentTimeMillis())
+                        if (toSend != null) {
+                            for (frame in toSend) {
+                                try {
+                                    tsClient.sendAudio(codec.encode(shortsToBytes(frame)), CODEC_OPUS_VOICE)
+                                } catch (_: Exception) {}
+                            }
+                        }
+                        _isLocalVoiceActive.value = vadGate.isActive
+                    } else {
+                        var energy = 0L
+                        for (i in 0 until read) {
+                            energy += buffer[i].toLong() * buffer[i].toLong()
+                        }
+                        val rms = Math.sqrt(energy.toDouble() / read)
+                        val isVoiceActive = rms > 150.0 // Adjusted threshold for voice activity
+                        _isLocalVoiceActive.value = isVoiceActive
+
+                        val pcmBytes = shortsToBytes(buffer)
+                        try {
+                            val encoded = codec.encode(pcmBytes)
+                            tsClient.sendAudio(encoded, CODEC_OPUS_VOICE)
+                        } catch (_: Exception) {}
                     }
-                    val rms = Math.sqrt(energy.toDouble() / read)
-                    val isVoiceActive = rms > 150.0 // Adjusted threshold for voice activity
-                    _isLocalVoiceActive.value = isVoiceActive
-                    
-                    val pcmBytes = shortsToBytes(buffer)
-                    try {
-                        val encoded = codec.encode(pcmBytes)
-                        tsClient.sendAudio(encoded, CODEC_OPUS_VOICE)
-                    } catch (_: Exception) {}
                 } else {
+                    vadGate.reset()
                     _isLocalVoiceActive.value = false
                 }
             }
@@ -212,6 +246,7 @@ class AudioBridge(
         _isCapturing.value = false
         captureJob?.cancel()
         captureJob = null
+        vadGate.reset()
         audioRecord?.stop()
         audioRecord?.release()
         audioRecord = null
