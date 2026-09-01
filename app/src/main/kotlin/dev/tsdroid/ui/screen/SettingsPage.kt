@@ -38,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.mikepenz.markdown.m3.Markdown
 import coil.compose.AsyncImage
 import dev.tsdroid.bridge.IdentityFileStore
 import dev.tsdroid.bridge.MicMode
@@ -803,10 +804,17 @@ private fun UpdateCheckRow(context: Context) {
                         }
                     } else {
                         val changelog = updateInfo!!.changelog
-                        Text(
-                            text = changelog.take(2000).ifBlank { stringResource(R.string.update_no_changelog) },
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
+                        if (changelog.isBlank()) {
+                            Text(
+                                text = stringResource(R.string.update_no_changelog),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        } else {
+                            Markdown(
+                                content = changelog.take(4000),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
                 }
             },

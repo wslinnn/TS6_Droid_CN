@@ -111,6 +111,7 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.coil.compose)
+    implementation(libs.mikepenz.markdown.m3)
     debugImplementation(libs.androidx.ui.tooling)
 
     testImplementation(libs.junit)
