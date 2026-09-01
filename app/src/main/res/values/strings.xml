@@ -217,7 +217,4 @@
     <string name="about_repo_link">🔗 Ouvrir le dépôt GitHub de ce projet</string>
     <string name="about_warning_title">⚠️ Avertissement de Fraude</string>
     <string name="about_warning_desc">Ce programme est un produit purement bénévole et à but non lucratif destiné à l\'échange technique open-source. Il est entièrement GRATUIT et entièrement OPEN-SOURCE ! Toute forme de vente commerciale, d\'achat groupé ou de facturation via des codes d\'activation est strictement interdite. Si vous avez obtenu ce logiciel via des canaux payants (tels que des bots de revente, des plateformes de trading, des services de téléchargement payants, etc.), vous avez été victime d\'une arnaque ! Demandez immédiatement un remboursement sur la plateforme et signalez les revendeurs dans ce dépôt.</string>
-    <string name="about_contributors_title">Contributeurs</string>
-    <string name="about_contributions_count">%1$d contributions</string>
-    <string name="contributors_load_error">Échec du chargement</string>
 </resources>

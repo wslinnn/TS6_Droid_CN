@@ -216,8 +216,5 @@
     <string name="about_repo_link">🔗 点击访问本项目的 GitHub 仓库</string>
     <string name="about_warning_title">⚠️ 谨防受骗（郑重免责声明）</string>
     <string name="about_warning_desc">本程序属于纯公益、非盈利性质的开源技术交流产物，完全免费，完全开源！严禁任何形式的商业兜售、打包买断或捆绑卡密收费行为。如果您是通过付费渠道（如二手机器人、各大交易平台、收费代下等）购买获得本软件，说明您已被骗！请立即向平台发起退款维权，并前往本仓库反馈。</string>
-    <string name="about_contributors_title">贡献者</string>
-    <string name="about_contributions_count">%1$d 次贡献</string>
-    <string name="contributors_load_error">加载失败</string>
     <string name="accessibility_service_desc">TeamSpeak 6 全局语音控制</string>
 </resources>

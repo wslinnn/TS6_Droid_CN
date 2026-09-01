@@ -6,33 +6,19 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import dev.tsdroid.data.SettingsStore
 import dev.tsdroid.han.R
 import dev.tsdroid.ui.component.AnimeBackground
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import java.net.URL
-
-private data class GitHubContributor(
-    val login: String,
-    val avatarUrl: String,
-    val contributions: Int,
-)
 
 @Composable
 fun AboutScreen(onBack: () -> Unit) {
@@ -41,40 +27,6 @@ fun AboutScreen(onBack: () -> Unit) {
     val scrollState = rememberScrollState()
     val settingsStore = remember { SettingsStore(context) }
     val animeBackground by settingsStore.animeBackground.collectAsStateWithLifecycle(initialValue = false)
-
-    var contributors by remember { mutableStateOf<List<GitHubContributor>>(emptyList()) }
-    var isLoadingContributors by remember { mutableStateOf(true) }
-    var reloadKey by remember { mutableStateOf(0) }
-
-    LaunchedEffect(reloadKey) {
-        isLoadingContributors = true
-        withContext(Dispatchers.IO) {
-            try {
-                val url = URL("https://api.github.com/repos/wslinnn/TS6_Droid_CN/contributors")
-                val conn = url.openConnection()
-                conn.connectTimeout = 10000
-                conn.readTimeout = 10000
-                val json = conn.getInputStream().bufferedReader().use { it.readText() }
-                val arr = JSONArray(json)
-                val list = mutableListOf<GitHubContributor>()
-                for (i in 0 until arr.length()) {
-                    val obj = arr.getJSONObject(i)
-                    list.add(
-                        GitHubContributor(
-                            login = obj.getString("login"),
-                            avatarUrl = obj.getString("avatar_url"),
-                            contributions = obj.getInt("contributions"),
-                        )
-                    )
-                }
-                contributors = list
-            } catch (_: Exception) {
-                contributors = emptyList()
-            } finally {
-                isLoadingContributors = false
-            }
-        }
-    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         AnimeBackground(enabled = animeBackground)
@@ -155,58 +107,6 @@ fun AboutScreen(onBack: () -> Unit) {
                     }
                 }
             )
-
-            Spacer(modifier = Modifier.height(28.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 1.dp)
-            Spacer(modifier = Modifier.height(28.dp))
-
-            Text(text = stringResource(R.string.about_contributors_title), style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(12.dp))
-
-            if (isLoadingContributors) {
-                CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(16.dp)
-                )
-            } else if (contributors.isEmpty()) {
-                Text(
-                    text = stringResource(R.string.contributors_load_error),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                TextButton(onClick = { reloadKey++ }) {
-                    Text(stringResource(R.string.retry))
-                }
-            } else {
-                contributors.forEach { contributor ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        AsyncImage(
-                            model = contributor.avatarUrl,
-                            contentDescription = contributor.login,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = contributor.login,
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                            Text(
-                                text = stringResource(R.string.about_contributions_count, contributor.contributions),
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                    }
-                }
-            }
 
             Spacer(modifier = Modifier.height(28.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 1.dp)
