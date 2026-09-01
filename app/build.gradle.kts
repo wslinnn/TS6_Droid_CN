@@ -12,8 +12,8 @@ android {
         applicationId = "com.wslinnn.ts6mobile"
         minSdk = 29
         targetSdk = 35
-        versionCode = 12
-        versionName = "2.2.2-Han"
+        versionCode = 13
+        versionName = "2.3.0-Han"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
