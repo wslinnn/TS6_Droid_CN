@@ -90,6 +90,29 @@ class AudioBridge(
     @Volatile
     private var mutedUserIds: Set<Int> = emptySet()
 
+    // Per-user playback gain in dB (keyed by client id, session-scoped)
+    private val userGainsDb = ConcurrentHashMap<Int, Float>()
+
+    fun setUserGainDb(userId: Int, db: Float) {
+        if (db == 0f) userGainsDb.remove(userId) else userGainsDb[userId] = db
+    }
+
+    /**
+     * Drop queues, decoders and gains for clients that are no longer on the
+     * server, so recycled client ids never inherit old state.
+     */
+    fun pruneUsers(activeIds: Set<Int>) {
+        for (id in userDecoders.keys) {
+            if (id !in activeIds) {
+                userDecoders.remove(id)?.let { decoder ->
+                    try { decoder.close() } catch (_: Exception) {}
+                }
+            }
+        }
+        userQueues.keys.retainAll(activeIds)
+        userGainsDb.keys.retainAll(activeIds)
+    }
+
     private val _isMuted = MutableStateFlow(true) // Start muted (PTT default)
     val isMuted: StateFlow<Boolean> = _isMuted.asStateFlow()
 
@@ -301,13 +324,26 @@ class AudioBridge(
                         val pcmBytes = decoder.decode(opusData)
                         bytesToShorts(pcmBytes, decodeBuffer)
                         hasData = true
-                        // Mix: sum with clipping
-                        for (i in mixBuffer.indices) {
-                            val sum = mixBuffer[i].toInt() + decodeBuffer[i].toInt()
-                            mixBuffer[i] = sum.coerceIn(
-                                Short.MIN_VALUE.toInt(),
-                                Short.MAX_VALUE.toInt(),
-                            ).toShort()
+                        // Per-user gain (dB) applied before summing
+                        val gainDb = userGainsDb[userId]
+                        if (gainDb != null && gainDb != 0f) {
+                            val g = VadGate.dbToGain(gainDb)
+                            for (i in mixBuffer.indices) {
+                                val sum = mixBuffer[i] + (decodeBuffer[i] * g).toInt()
+                                mixBuffer[i] = sum.coerceIn(
+                                    Short.MIN_VALUE.toInt(),
+                                    Short.MAX_VALUE.toInt(),
+                                ).toShort()
+                            }
+                        } else {
+                            // Mix: sum with clipping
+                            for (i in mixBuffer.indices) {
+                                val sum = mixBuffer[i].toInt() + decodeBuffer[i].toInt()
+                                mixBuffer[i] = sum.coerceIn(
+                                    Short.MIN_VALUE.toInt(),
+                                    Short.MAX_VALUE.toInt(),
+                                ).toShort()
+                            }
                         }
                     } catch (_: Exception) {}
                 }

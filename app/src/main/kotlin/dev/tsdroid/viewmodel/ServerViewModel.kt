@@ -29,6 +29,7 @@ import dev.tsdroid.han.R
 import dev.tsdroid.data.BookmarkStore
 import dev.tsdroid.data.MessageStore
 import dev.tsdroid.data.SettingsStore
+import dev.tsdroid.data.UserAudioStore
 import dev.tsdroid.service.TsConnectionService
 import dev.tsdroid.service.WhisperManager
 import dev.tslib.Channel
@@ -128,6 +129,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     private val messageStore = MessageStore(application)
     private val bookmarkStore = BookmarkStore(application)
     private val settingsStore = SettingsStore(application)
+    private val userAudioStore = UserAudioStore(application)
     private val iconCache = IconCache(application.cacheDir)
     private val avatarCache = AvatarCache(application.cacheDir)
     private val fileCache = FileCache(application)
@@ -193,6 +195,17 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     val isPttMode: StateFlow<Boolean> = micMode
         .map { it == MicMode.PTT }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    /** Per-user volume (dB) for the current session, keyed by client id. */
+    private val _userVolumes = MutableStateFlow<Map<Int, Float>>(emptyMap())
+    val userVolumes: StateFlow<Map<Int, Float>> = _userVolumes.asStateFlow()
+
+    // Persisted per-user audio settings (keyed by permanent uid), mirrored
+    // onto session client ids in syncUserAudio()
+    private val volumeByUid = HashMap<String, Float>()
+    private val loadedVolumeUids = mutableSetOf<String>()
+    private var persistedMutedUids = emptySet<String>()
+    private var userAudioAddress: String? = null
 
     private val _isOutputMuted = MutableStateFlow(false)
     val isOutputMuted: StateFlow<Boolean> = _isOutputMuted.asStateFlow()
@@ -370,6 +383,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 service.tsClient.users.collect {
                     _rawUsers.value = it
                     loadAvatars(it)
+                    syncUserAudio(it)
                 }
             }
             viewModelScope.launch {
@@ -808,13 +822,86 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun toggleMuteUser(clientId: Int) {
-        val updated = if (clientId in _mutedUserIds.value) {
-            _mutedUserIds.value - clientId
-        } else {
-            _mutedUserIds.value + clientId
+        val user = _rawUsers.value.find { it.id == clientId }
+        if (user == null || user.uid.isNullOrEmpty()) {
+            // No permanent identity to persist against — session-only fallback
+            val updated = if (clientId in _mutedUserIds.value) {
+                _mutedUserIds.value - clientId
+            } else {
+                _mutedUserIds.value + clientId
+            }
+            _mutedUserIds.value = updated
+            audioBridge?.setMutedUserIds(updated)
+            return
         }
-        _mutedUserIds.value = updated
-        audioBridge?.setMutedUserIds(updated)
+        val addr = tsClient?.serverAddress ?: return
+        val nowMuted = user.uid !in persistedMutedUids
+        persistedMutedUids = if (nowMuted) persistedMutedUids + user.uid else persistedMutedUids - user.uid
+        viewModelScope.launch {
+            userAudioStore.setMuted(addr, user.uid, if (nowMuted) true else null)
+        }
+        syncUserAudio(_rawUsers.value)
+    }
+
+    /**
+     * Apply a per-user volume in dB. Drag updates pass commit=false (bridge
+     * only); the final value is committed with commit=true to persist it for
+     * future sessions.
+     */
+    fun setUserVolumeDb(clientId: Int, db: Float, commit: Boolean) {
+        audioBridge?.setUserGainDb(clientId, db)
+        _userVolumes.value = if (db == 0f) _userVolumes.value - clientId else _userVolumes.value + (clientId to db)
+        if (!commit) return
+        val user = _rawUsers.value.find { it.id == clientId } ?: return
+        val addr = tsClient?.serverAddress ?: return
+        if (user.uid.isNullOrEmpty()) return
+        if (db == 0f) volumeByUid.remove(user.uid) else volumeByUid[user.uid] = db
+        viewModelScope.launch {
+            userAudioStore.setVolumeDb(addr, user.uid, if (db == 0f) null else db)
+        }
+    }
+
+    /**
+     * Mirror persisted per-user volume/mute (keyed by permanent uid) onto the
+     * current session's client ids and the audio bridge. Called on every
+     * users-list update; also prunes bridge state of departed clients.
+     */
+    private fun syncUserAudio(users: List<User>) {
+        val bridge = audioBridge ?: return
+        val addr = tsClient?.serverAddress ?: return
+        val myId = tsClient?.clientId
+        if (userAudioAddress != addr) {
+            userAudioAddress = addr
+            volumeByUid.clear()
+            loadedVolumeUids.clear()
+            persistedMutedUids = emptySet()
+        }
+        viewModelScope.launch {
+            for (user in users) {
+                if (user.id == myId || user.uid.isNullOrEmpty() || user.uid in loadedVolumeUids) continue
+                loadedVolumeUids.add(user.uid)
+                userAudioStore.volumeDb(addr, user.uid)?.let { volumeByUid[user.uid] = it }
+                if (userAudioStore.muted(addr, user.uid) == true) {
+                    persistedMutedUids = persistedMutedUids + user.uid
+                }
+            }
+            val uidToClientId = users.filter { !it.uid.isNullOrEmpty() }.associate { it.uid to it.id }
+            val derived = volumeByUid.entries.mapNotNull { (uid, db) ->
+                uidToClientId[uid]?.let { it to db }
+            }.toMap()
+            // In-flight (uncommitted) slider drags win over persisted values,
+            // so a users-list refresh mid-drag cannot snap the slider back
+            _userVolumes.value = derived + _userVolumes.value.filterKeys { clientId ->
+                clientId in uidToClientId.values
+            }
+            val mutedClientIds = users.filter { it.uid in persistedMutedUids }.map { it.id }.toSet()
+            _mutedUserIds.value = mutedClientIds
+            bridge.setMutedUserIds(mutedClientIds)
+            for ((uid, db) in volumeByUid) {
+                uidToClientId[uid]?.let { bridge.setUserGainDb(it, db) }
+            }
+            bridge.pruneUsers(users.map { it.id }.toSet())
+        }
     }
 
     private fun currentChannelId(): Long {

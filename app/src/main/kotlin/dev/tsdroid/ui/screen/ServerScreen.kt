@@ -105,6 +105,7 @@ import dev.tsdroid.ui.component.ChannelTree
 import dev.tsdroid.ui.component.ChatView
 import dev.tsdroid.ui.component.FileManagerDialog
 import dev.tsdroid.ui.component.ShareTarget
+import dev.tsdroid.ui.component.UserPanelSheet
 import dev.tsdroid.viewmodel.ChatMessage
 import dev.tsdroid.viewmodel.DownloadState
 import dev.tsdroid.viewmodel.FileAttachment
@@ -134,6 +135,7 @@ fun ServerScreen(
     val privateMessages by viewModel.privateMessages.collectAsStateWithLifecycle()
     val isPttMode by viewModel.isPttMode.collectAsStateWithLifecycle()
     val micMode by viewModel.micMode.collectAsStateWithLifecycle()
+    val userVolumes by viewModel.userVolumes.collectAsStateWithLifecycle()
     val isOutputMuted by viewModel.isOutputMuted.collectAsStateWithLifecycle()
     val isMicMuted by viewModel.isMicMuted.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
@@ -237,6 +239,9 @@ fun ServerScreen(
     }
 
     val totalUnread = unreadChannel + totalUnreadPrivate
+
+    // Per-user panel (volume / mute / info) — opened by long-pressing a row
+    var userPanelUserId by remember { mutableStateOf<Int?>(null) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         AnimeBackground(enabled = animeBackground)
@@ -435,6 +440,10 @@ fun ServerScreen(
                     }
                 },
                 onUserLongClick = { user -> viewModel.toggleMuteUser(user.id) },
+                onUserLongPress = { user ->
+                    // Panel actions (volume/mute/PM) are meaningless on the own row
+                    if (user.id != viewModel.myClientId) userPanelUserId = user.id
+                },
                 onWhisperClick = { userId ->
                     if (userId != viewModel.myClientId) viewModel.toggleWhisper(userId)
                 },
@@ -546,6 +555,28 @@ fun ServerScreen(
             }
         }
     }
+
+    // Per-user panel (volume / mute / info) — long-press a user row
+    val panelUser = users.find { it.id == userPanelUserId }
+    UserPanelSheet(
+        user = panelUser,
+        avatar = panelUser?.uid?.let { userAvatars[it] },
+        volumeDb = userPanelUserId?.let { userVolumes[it] } ?: 0f,
+        isMuted = userPanelUserId != null && userPanelUserId in mutedUserIds,
+        onVolumeChange = { db -> userPanelUserId?.let { viewModel.setUserVolumeDb(it, db, commit = false) } },
+        onVolumeCommit = { db -> userPanelUserId?.let { viewModel.setUserVolumeDb(it, db, commit = true) } },
+        onToggleMute = { userPanelUserId?.let { viewModel.toggleMuteUser(it) } },
+        onPrivateMessage = {
+            val id = userPanelUserId
+            if (id != null) {
+                pmTargetId = id
+                chatTab = 1
+                chatOpen = true
+            }
+            userPanelUserId = null
+        },
+        onDismiss = { userPanelUserId = null },
+    )
 
     // Image preview overlay (bitmap is pre-decoded off the main thread)
     if (previewImageBitmap != null) {

@@ -86,6 +86,15 @@
     <string name="mic_mode_open">开放麦克风</string>
     <string name="vad_threshold">触发阈值：%1$d dB</string>
     <string name="vad_threshold_hint">说话声高于阈值时自动发送。-45 dB 适合大多数环境。</string>
+    <string name="user_uid">唯一 ID</string>
+    <string name="user_platform">平台</string>
+    <string name="user_version">版本</string>
+    <string name="user_country">国家/地区</string>
+    <string name="user_talkpower">说话功率</string>
+    <string name="user_volume">音量：</string>
+    <string name="volume_default">默认</string>
+    <string name="volume_reset">重置音量</string>
+    <string name="private_message">私信</string>
     <string name="section_chat">聊天</string>
     <string name="section_more">更多</string>
     <string name="update_check">点击检查更新</string>

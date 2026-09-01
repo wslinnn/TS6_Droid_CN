@@ -47,15 +47,16 @@ import dev.tsdroid.han.R
 import dev.tslib.User
 
 import dev.tsdroid.service.WhisperManager
-import androidx.compose.foundation.clickable
 import androidx.compose.material3.IconButton
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun UserItem(
     user: User,
     avatar: ImageBitmap? = null,
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     onToggleMute: (() -> Unit)? = null,
     onWhisperClick: ((Int) -> Unit)? = null,
     isLocallyMuted: Boolean = false,
@@ -65,7 +66,10 @@ fun UserItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { onClick?.invoke() }
+                .combinedClickable(
+                    onClick = { onClick?.invoke() },
+                    onLongClick = { onLongClick?.invoke() },
+                )
                 .padding(vertical = 3.dp, horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

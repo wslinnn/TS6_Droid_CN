@@ -87,6 +87,15 @@
     <string name="mic_mode_open">Open microphone</string>
     <string name="vad_threshold">Trigger threshold: %1$d dB</string>
     <string name="vad_threshold_hint">Audio above the threshold is transmitted. -45 dB suits most environments.</string>
+    <string name="user_uid">Unique ID</string>
+    <string name="user_platform">Platform</string>
+    <string name="user_version">Version</string>
+    <string name="user_country">Country</string>
+    <string name="user_talkpower">Talk power</string>
+    <string name="user_volume">Volume:</string>
+    <string name="volume_default">default</string>
+    <string name="volume_reset">Reset volume</string>
+    <string name="private_message">Private message</string>
     <string name="section_chat">Chat</string>
     <string name="section_more">More</string>
     <string name="update_check">Check for updates</string>

@@ -87,6 +87,15 @@
     <string name="mic_mode_open">Micro ouvert</string>
     <string name="vad_threshold">Seuil de déclenchement : %1$d dB</string>
     <string name="vad_threshold_hint">Les niveaux au-dessus du seuil déclenchent la transmission. -45 dB convient à la plupart des environnements.</string>
+    <string name="user_uid">ID unique</string>
+    <string name="user_platform">Plateforme</string>
+    <string name="user_version">Version</string>
+    <string name="user_country">Pays</string>
+    <string name="user_talkpower">Puissance de parole</string>
+    <string name="user_volume">Volume :</string>
+    <string name="volume_default">par défaut</string>
+    <string name="volume_reset">Réinitialiser le volume</string>
+    <string name="private_message">Message privé</string>
     <string name="section_chat">Chat</string>
     <string name="section_more">Plus</string>
     <string name="update_check">Vérifier les mises à jour</string>
