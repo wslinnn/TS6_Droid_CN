@@ -96,6 +96,13 @@
     <string name="volume_default">default</string>
     <string name="volume_reset">Reset volume</string>
     <string name="private_message">Private message</string>
+    <string name="server_info">Server info</string>
+    <string name="server_platform_version">Platform / version</string>
+    <string name="server_clients">Online clients</string>
+    <string name="server_clients_format">%1$d / %2$d</string>
+    <string name="server_channels">Channels</string>
+    <string name="server_uptime">Uptime</string>
+    <string name="server_welcome">Welcome message</string>
     <string name="section_chat">Chat</string>
     <string name="section_more">More</string>
     <string name="update_check">Check for updates</string>

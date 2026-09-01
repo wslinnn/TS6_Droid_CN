@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.HeadsetOff
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Person
@@ -104,6 +105,7 @@ import dev.tsdroid.ui.component.AnimeBackground
 import dev.tsdroid.ui.component.ChannelTree
 import dev.tsdroid.ui.component.ChatView
 import dev.tsdroid.ui.component.FileManagerDialog
+import dev.tsdroid.ui.component.ServerInfoSheet
 import dev.tsdroid.ui.component.ShareTarget
 import dev.tsdroid.ui.component.UserPanelSheet
 import dev.tsdroid.viewmodel.ChatMessage
@@ -242,6 +244,7 @@ fun ServerScreen(
 
     // Per-user panel (volume / mute / info) — opened by long-pressing a row
     var userPanelUserId by remember { mutableStateOf<Int?>(null) }
+    var showServerInfo by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         AnimeBackground(enabled = animeBackground)
@@ -256,6 +259,9 @@ fun ServerScreen(
                     scrolledContainerColor = Color.Transparent,
                 ),
                 actions = {
+                    IconButton(onClick = { showServerInfo = true }) {
+                        Icon(Icons.Default.Info, contentDescription = stringResource(R.string.server_info))
+                    }
                     IconButton(onClick = {
                         val opening = !fileManagerOpen
                         viewModel.toggleFileManager()
@@ -577,6 +583,14 @@ fun ServerScreen(
         },
         onDismiss = { userPanelUserId = null },
     )
+
+    if (showServerInfo) {
+        ServerInfoSheet(
+            info = serverInfo,
+            address = viewModel.connectedAddress,
+            onDismiss = { showServerInfo = false },
+        )
+    }
 
     // Image preview overlay (bitmap is pre-decoded off the main thread)
     if (previewImageBitmap != null) {

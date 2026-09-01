@@ -95,6 +95,13 @@
     <string name="volume_default">默认</string>
     <string name="volume_reset">重置音量</string>
     <string name="private_message">私信</string>
+    <string name="server_info">服务器信息</string>
+    <string name="server_platform_version">平台 / 版本</string>
+    <string name="server_clients">在线人数</string>
+    <string name="server_clients_format">%1$d / %2$d</string>
+    <string name="server_channels">频道数</string>
+    <string name="server_uptime">运行时长</string>
+    <string name="server_welcome">欢迎消息</string>
     <string name="section_chat">聊天</string>
     <string name="section_more">更多</string>
     <string name="update_check">点击检查更新</string>

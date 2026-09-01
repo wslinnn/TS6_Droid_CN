@@ -172,6 +172,10 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     private val _serverInfo = MutableStateFlow<ServerInfo?>(null)
     val serverInfo: StateFlow<ServerInfo?> = _serverInfo.asStateFlow()
 
+    /** Address of the current/last connection, for the server info sheet. */
+    val connectedAddress: String?
+        get() = tsClient?.serverAddress ?: serverAddress
+
     private val _channelIcons = MutableStateFlow<Map<Long, ImageBitmap>>(emptyMap())
     val channelIcons: StateFlow<Map<Long, ImageBitmap>> = _channelIcons.asStateFlow()
 
