@@ -12,8 +12,8 @@ android {
         applicationId = "com.wslinnn.ts6mobile"
         minSdk = 29
         targetSdk = 35
-        versionCode = 15
-        versionName = "2.4.0-Han"
+        versionCode = 16
+        versionName = "2.5.0-Han"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -89,7 +89,7 @@ android {
 
 // Task to build Rust native libraries via cargo-ndk
 tasks.register<Exec>("buildRustLibs") {
-    workingDir = file("${rootDir}/../tslib_multi")
+    workingDir = file("${rootDir}/tslib_multi")
     environment("ANDROID_NDK_HOME", System.getenv("ANDROID_NDK_HOME")
         ?: "${System.getProperty("user.home")}/Android/Sdk/ndk/27.2.12479018")
     environment("ANDROID_NDK", System.getenv("ANDROID_NDK_HOME")
