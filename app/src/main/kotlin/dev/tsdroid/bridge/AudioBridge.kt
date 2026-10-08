@@ -5,10 +5,13 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -41,6 +44,15 @@ class AudioBridge(
         private const val FRAME_SIZE_SAMPLES = SAMPLE_RATE * FRAME_SIZE_MS / 1000 // 960
         private const val FRAME_SIZE_BYTES = FRAME_SIZE_SAMPLES * 2 // 16-bit PCM = 2 bytes/sample
         private const val MAX_QUEUE_FRAMES = 10 // Max buffered frames per user
+
+        /** Output volume multiplier while another app holds transient focus (can-duck). */
+        private const val DUCK_FACTOR = 0.3f
+
+        /** Never adapt the voice bitrate below this — speech intelligibility floor. */
+        private const val MIN_ADAPTIVE_BITRATE = 16_000
+
+        /** Encoder FEC stays disabled below this observed loss fraction. */
+        private const val FEC_ENABLE_LOSS = 0.02f
     }
 
     private val audioConfig = AudioConfig()
@@ -55,6 +67,23 @@ class AudioBridge(
     private var audioRecord: AudioRecord? = null
     private var audioTrack: AudioTrack? = null
     private var noiseSuppressor: NoiseSuppressor? = null
+    private var acousticEchoCanceler: AcousticEchoCanceler? = null
+
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private var audioFocusRequest: AudioFocusRequest? = null
+
+    // Scope of the running capture — used to retry focus acquisition after
+    // a permanent loss (the system never dispatches GAIN for those)
+    private var captureScope: CoroutineScope? = null
+    private var focusRetryJob: Job? = null
+
+    // Output pause while another app holds audio focus (navigation, calls…)
+    @Volatile
+    private var outputSuspendedByFocus = false
+
+    // Output volume reduction while another app plays a short prompt (can-duck)
+    @Volatile
+    private var duckedByFocus = false
 
     private var captureJob: Job? = null
     private var playbackJob: Job? = null
@@ -182,6 +211,8 @@ class AudioBridge(
         }
         audioRecord = record
         _isCapturing.value = true
+        captureScope = scope
+        requestAudioFocus()
         noiseSuppressor?.release()
         noiseSuppressor = null
         if (noiseSuppressionEnabled && NoiseSuppressor.isAvailable()) {
@@ -195,6 +226,24 @@ class AudioBridge(
             }
         } else {
             Log.i(TAG, "NoiseSuppressor skipped: enabled=$noiseSuppressionEnabled, available=${NoiseSuppressor.isAvailable()}")
+        }
+        // Echo cancellation is independent of the noise-suppression toggle:
+        // without it, speaker playback bleeds into the mic and remote users
+        // hear themselves. VOICE_COMMUNICATION implies AEC on most devices,
+        // but that is not guaranteed everywhere — attach it when offered.
+        acousticEchoCanceler?.release()
+        acousticEchoCanceler = null
+        if (AcousticEchoCanceler.isAvailable()) {
+            try {
+                AcousticEchoCanceler.create(record.audioSessionId)?.also {
+                    acousticEchoCanceler = it
+                    Log.i(TAG, "AcousticEchoCanceler enabled (session=${record.audioSessionId})")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to create AcousticEchoCanceler", e)
+            }
+        } else {
+            Log.i(TAG, "AcousticEchoCanceler not available on this device")
         }
 
         captureJob = scope.launch(Dispatchers.IO) {
@@ -269,12 +318,134 @@ class AudioBridge(
         _isCapturing.value = false
         captureJob?.cancel()
         captureJob = null
+        focusRetryJob?.cancel()
+        focusRetryJob = null
+        captureScope = null
         vadGate.reset()
+        abandonAudioFocus()
         audioRecord?.stop()
         audioRecord?.release()
         audioRecord = null
         noiseSuppressor?.release()
         noiseSuppressor = null
+        acousticEchoCanceler?.release()
+        acousticEchoCanceler = null
+    }
+
+    /**
+     * Hold audio focus for the duration of a voice session: without it,
+     * incoming calls, navigation prompts and other media apps play over
+     * (or under) the voice stream with no coordination.
+     */
+    private fun requestAudioFocus() {
+        if (audioFocusRequest != null) return
+        val focusAttributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+        val listener = AudioManager.OnAudioFocusChangeListener { change ->
+            when (change) {
+                // Permanent loss never gets a GAIN callback afterwards —
+                // duck the output and keep re-requesting in the background
+                // until focus comes back, so a finished call or closed media
+                // app restores full volume without a reconnect
+                AudioManager.AUDIOFOCUS_LOSS -> {
+                    duckedByFocus = true
+                    suspendOutput(false)
+                    startFocusRetry()
+                }
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> suspendOutput(true)
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> duckedByFocus = true
+                AudioManager.AUDIOFOCUS_GAIN -> {
+                    duckedByFocus = false
+                    suspendOutput(false)
+                    focusRetryJob?.cancel()
+                    focusRetryJob = null
+                }
+            }
+        }
+        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(focusAttributes)
+            .setOnAudioFocusChangeListener(listener)
+            .build()
+        // Keep the request object even when denied: the retry loop re-uses it
+        audioFocusRequest = request
+        if (audioManager.requestAudioFocus(request) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            // Denied at start: keep running ducked until the retry wins focus
+            Log.w(TAG, "Audio focus not granted; ducking output until focus is available")
+            duckedByFocus = true
+            startFocusRetry()
+        }
+    }
+
+    /** Re-request focus with exponential backoff until it is granted again. */
+    private fun startFocusRetry() {
+        if (focusRetryJob?.isActive == true) return
+        val scope = captureScope ?: return
+        focusRetryJob = scope.launch {
+            var backoffMs = 2_000L
+            while (isActive && _isCapturing.value) {
+                delay(backoffMs)
+                backoffMs = (backoffMs * 2).coerceAtMost(15_000L)
+                val request = audioFocusRequest ?: break
+                if (audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                    Log.i(TAG, "Audio focus regained after retry")
+                    duckedByFocus = false
+                    suspendOutput(false)
+                    break
+                }
+            }
+        }
+    }
+
+    private fun abandonAudioFocus() {
+        focusRetryJob?.cancel()
+        focusRetryJob = null
+        audioFocusRequest?.let {
+            audioManager.abandonAudioFocusRequest(it)
+        }
+        audioFocusRequest = null
+        suspendOutput(false)
+        duckedByFocus = false
+    }
+
+    private fun suspendOutput(suspend: Boolean) {
+        if (outputSuspendedByFocus == suspend) return
+        outputSuspendedByFocus = suspend
+        if (suspend) {
+            // Discard anything queued — a resume after a focus gap must not
+            // replay stale audio
+            for ((_, queue) in userQueues) {
+                synchronized(queue) { queue.clear() }
+            }
+        }
+    }
+
+    /**
+     * Adapt the Opus encoder to observed network quality. The quality
+     * monitor calls this with the recent packet-loss fraction; the encoder
+     * scales FEC redundancy and sheds bitrate rather than flooding a weak
+     * link with large frames.
+     */
+    fun applyNetworkQuality(packetLoss: Float) {
+        val codec = encoder ?: return
+        val lossPercent = (packetLoss * 100).toInt().coerceIn(0, 100)
+        val fecEnabled = packetLoss >= FEC_ENABLE_LOSS
+        val baseBitrate = audioConfig.bitrate.takeIf { it > 0 } ?: 32_000
+        val target = when {
+            packetLoss >= 0.15f -> baseBitrate / 2
+            packetLoss >= 0.05f -> baseBitrate * 3 / 4
+            else -> baseBitrate
+        }.coerceAtLeast(MIN_ADAPTIVE_BITRATE)
+        try {
+            codec.setFec(fecEnabled)
+            // Headroom above the observed loss so FEC covers bursts
+            codec.setExpectedPacketLoss((lossPercent + 5).coerceAtMost(40))
+            codec.setBitrate(target)
+            Log.d(TAG, "Adaptive audio: loss=${"%.1f".format(packetLoss * 100)}% fec=$fecEnabled bitrate=$target")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to adapt encoder to network quality", e)
+        }
     }
 
     private fun initAudioTrack() {
@@ -349,7 +520,9 @@ class AudioBridge(
                 }
 
                 if (hasData) {
-                    val gain = gainFactor
+                    // Focus ducking multiplies the user gain — audio stays
+                    // faintly audible under another app's short prompt
+                    val gain = gainFactor * (if (duckedByFocus) DUCK_FACTOR else 1f)
                     if (gain != 1.0f) {
                         for (i in mixBuffer.indices) {
                             mixBuffer[i] = (mixBuffer[i] * gain).toInt()
@@ -360,8 +533,10 @@ class AudioBridge(
                     val bytes = shortsToBytes(mixBuffer)
                     audioTrack?.write(bytes, 0, bytes.size)
                 } else {
-                    // No audio data — sleep briefly to avoid busy-waiting
-                    delay(5)
+                    // No audio data — idle wait. 20ms keeps the wake rate at
+                    // 50/s during silence (battery) while adding at most one
+                    // frame of latency when speech starts
+                    delay(20)
                 }
             }
         }
@@ -378,6 +553,7 @@ class AudioBridge(
     fun playAudio(userId: Int, opusData: ByteArray) {
         if (userId in mutedUserIds) return
         if (_isOutputMuted.value) return // Global output mute — discard incoming audio
+        if (outputSuspendedByFocus) return // Another app holds focus — discard instead of queueing
         val queue = userQueues.getOrPut(userId) { ArrayDeque() }
         synchronized(queue) {
             if (queue.size < MAX_QUEUE_FRAMES) {
@@ -422,6 +598,8 @@ class AudioBridge(
         audioTrack = null
         noiseSuppressor?.release()
         noiseSuppressor = null
+        acousticEchoCanceler?.release()
+        acousticEchoCanceler = null
         encoder?.close()
         encoder = null
         // Close per-user decoders
