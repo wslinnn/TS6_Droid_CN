@@ -22,6 +22,7 @@ import dev.tsdroid.bridge.AudioBridge
 import dev.tsdroid.bridge.FileCache
 import dev.tsdroid.bridge.IconCache
 import dev.tsdroid.bridge.MicMode
+import dev.tsdroid.bridge.QualitySnapshot
 import dev.tsdroid.bridge.TsClient
 import dev.tsdroid.bridge.TsFileEntry
 import dev.tsdroid.bridge.VadGate
@@ -40,8 +41,11 @@ import dev.tslib.User
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
@@ -89,7 +93,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
      * error rolls back only still-unconfirmed echoes — failures of unrelated
      * commands (channel moves etc.) can no longer delete an accepted message.
      */
-    private class PendingEcho(val target: String, val userId: Int?, val text: String, val at: Long) {
+    private class PendingEcho(val target: String, val convKey: String?, val text: String, val at: Long) {
         var confirmed = false
     }
     private val pendingOwnEchoes = ArrayDeque<PendingEcho>()
@@ -115,13 +119,13 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 _channelMessages.value = list
             }
         } else {
-            val userId = pending.userId ?: return
-            val existing = _privateMessages.value[userId] ?: return
+            val convKey = pending.convKey ?: return
+            val existing = _privateMessages.value[convKey] ?: return
             val list = existing.toMutableList()
             val idx = list.indexOfFirst { it.isMe && it.text == pending.text && it.timestamp >= pending.at }
             if (idx >= 0) {
                 list.removeAt(idx)
-                _privateMessages.value = _privateMessages.value.toMutableMap().apply { put(userId, list) }
+                _privateMessages.value = _privateMessages.value.toMutableMap().apply { put(convKey, list) }
             }
         }
     }
@@ -185,8 +189,12 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     private val _channelMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val channelMessages: StateFlow<List<ChatMessage>> = _channelMessages.asStateFlow()
 
-    private val _privateMessages = MutableStateFlow<Map<Int, List<ChatMessage>>>(emptyMap())
-    val privateMessages: StateFlow<Map<Int, List<ChatMessage>>> = _privateMessages.asStateFlow()
+    // Private conversations are keyed by the peer's UID (stable across
+    // reconnects), not by session client ids — clid-keyed history fragments
+    // into duplicate tabs every time someone reconnects. Peers without a
+    // uid fall back to a synthetic "clid:<n>" key.
+    private val _privateMessages = MutableStateFlow<Map<String, List<ChatMessage>>>(emptyMap())
+    val privateMessages: StateFlow<Map<String, List<ChatMessage>>> = _privateMessages.asStateFlow()
 
     // Separate PTT mode from actual mute state
     val micMode: StateFlow<MicMode> = settingsStore.micMode
@@ -226,6 +234,15 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     private val _connectionState = MutableStateFlow(ConnectionState.CONNECTED)
     val connectionState: StateFlow<Int> = _connectionState.asStateFlow()
 
+    // Connection quality (median/p95 RTT, loss, bandwidth) relayed from the
+    // service's QualityMonitor; null before the first sample arrives
+    private val _qualitySnapshot = MutableStateFlow<QualitySnapshot?>(null)
+    val qualitySnapshot: StateFlow<QualitySnapshot?> = _qualitySnapshot.asStateFlow()
+
+    /** Emits after a poke arrives so the UI can show in-app feedback. */
+    private val _pokeEvents = MutableSharedFlow<Pair<String, String>>(extraBufferCapacity = 8)
+    val pokeEvents: SharedFlow<Pair<String, String>> = _pokeEvents.asSharedFlow()
+
     // Set once the session is truly over (manual disconnect or auto-reconnect
     // exhausted); the UI navigates away on it instead of on every disconnect
     private val _sessionClosed = MutableStateFlow(false)
@@ -239,8 +256,8 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     // Unread message counters
     private val _unreadChannel = MutableStateFlow(0)
     val unreadChannel: StateFlow<Int> = _unreadChannel.asStateFlow()
-    private val _unreadPrivate = MutableStateFlow<Map<Int, Int>>(emptyMap())
-    val unreadPrivate: StateFlow<Map<Int, Int>> = _unreadPrivate.asStateFlow()
+    private val _unreadPrivate = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val unreadPrivate: StateFlow<Map<String, Int>> = _unreadPrivate.asStateFlow()
 
     val audioGain: StateFlow<Float> = settingsStore.audioGain
         .stateIn(viewModelScope, SharingStarted.Eagerly, 1.0f)
@@ -286,7 +303,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     // Track chat visibility to avoid incrementing unread for visible tab
     var isChatOpen = false
     var activeChatTab = 0
-    var activePmUserId: Int? = null
+    var activePmKey: String? = null
 
     private var bound = false
 
@@ -388,6 +405,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                     _rawUsers.value = it
                     loadAvatars(it)
                     syncUserAudio(it)
+                    mergeLegacyConversations(it)
                 }
             }
             viewModelScope.launch {
@@ -414,6 +432,9 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             viewModelScope.launch {
+                service.qualityMonitor.snapshot.collect { _qualitySnapshot.value = it }
+            }
+            viewModelScope.launch {
                 service.tsClient.events.collect { handleEvent(it) }
             }
             // Chat messages arrive on a replayed flow: events emitted between
@@ -429,14 +450,16 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                     rollbackLastPendingEcho()
                 }
             }
-            // Load persisted messages
+            // Load persisted messages and the unread badges that go with them
             viewModelScope.launch {
                 val addr = service.tsClient.serverAddress
                 if (!addr.isNullOrEmpty()) {
                     serverAddress = addr
-                    val (channelMsgs, privateMsgs) = messageStore.load(addr)
-                    if (channelMsgs.isNotEmpty()) _channelMessages.value = channelMsgs.map { migrateMessage(it) }
-                    if (privateMsgs.isNotEmpty()) _privateMessages.value = privateMsgs.mapValues { (_, msgs) -> msgs.map { migrateMessage(it) } }
+                    val stored = messageStore.load(addr)
+                    if (stored.channelMessages.isNotEmpty()) _channelMessages.value = stored.channelMessages.map { migrateMessage(it) }
+                    if (stored.privateMessages.isNotEmpty()) _privateMessages.value = stored.privateMessages.mapValues { (_, msgs) -> msgs.map { migrateMessage(it) } }
+                    if (stored.unreadChannel > 0) _unreadChannel.value = stored.unreadChannel
+                    if (stored.unreadPrivate.isNotEmpty()) _unreadPrivate.value = stored.unreadPrivate
                 }
             }
             // Start audio capture if not already running
@@ -532,6 +555,12 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     private fun handleEvent(event: Event) {
         try {
             when (event.type) {
+                "poked" -> {
+                    val pokerName = event.data["poker_name"] as? String ?: return
+                    val message = event.data["message"] as? String ?: ""
+                    Log.i(TAG, "Poked by $pokerName: $message")
+                    _pokeEvents.tryEmit(pokerName to message)
+                }
                 "talk_status_start" -> {
                     val userId = (event.data["user_id"] as? Number)?.toInt() ?: return
                     _talkingUserIds.value = _talkingUserIds.value + userId
@@ -614,44 +643,45 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                                         Log.w(TAG, "Private message without sender ID")
                                         return
                                     }
-                                    
+                                    val convKey = conversationKeyForClid(id)
+
                                     // Safely create and add message
                                     val msg = ChatMessage(
-                                        sender = sender, 
-                                        text = displayText, 
-                                        isPrivate = true, 
-                                        senderId = id, 
+                                        sender = sender,
+                                        text = displayText,
+                                        isPrivate = true,
+                                        senderId = id,
                                         fileAttachment = attachment
                                     )
-                                    
+
                                     val current = _privateMessages.value.toMutableMap()
-                                    val existingMessages = current[id] ?: emptyList()
-                                    current[id] = existingMessages + msg
+                                    val existingMessages = current[convKey] ?: emptyList()
+                                    current[convKey] = existingMessages + msg
                                     _privateMessages.value = current
-                                    
+
                                     scheduleSave()
-                                    
-                                    // Only increment if chat is closed or not on this user's PM
-                                    if (!isChatOpen || activeChatTab != 1 || activePmUserId != id) {
+
+                                    // Only increment if chat is closed or not on this conversation
+                                    if (!isChatOpen || activeChatTab != 1 || activePmKey != convKey) {
                                         val unread = _unreadPrivate.value.toMutableMap()
-                                        val currentUnread = unread[id] ?: 0
-                                        unread[id] = currentUnread + 1
+                                        val currentUnread = unread[convKey] ?: 0
+                                        unread[convKey] = currentUnread + 1
                                         _unreadPrivate.value = unread
                                     }
                                 }
                                 "channel" -> {
                                     // Safely create and add channel message
                                     val msg = ChatMessage(
-                                        sender = sender, 
-                                        text = displayText, 
-                                        fileAttachment = attachment
+                                        sender = sender,
+                                        text = displayText,
+                                        fileAttachment = attachment,
                                     )
-                                    
+
                                     val currentChannelMessages = _channelMessages.value
                                     _channelMessages.value = currentChannelMessages + msg
-                                    
+
                                     scheduleSave()
-                                    
+
                                     // Only increment if chat is closed or not on channel tab
                                     if (!isChatOpen || activeChatTab != 0) {
                                         val currentUnread = _unreadChannel.value
@@ -715,22 +745,30 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         return msg.copy(text = attachment.fileName, fileAttachment = attachment)
     }
 
-    fun setChatState(open: Boolean, tab: Int, pmUserId: Int? = null) {
+    fun setChatState(open: Boolean, tab: Int, pmKey: String? = null) {
         isChatOpen = open
         activeChatTab = tab
-        activePmUserId = pmUserId
+        activePmKey = pmKey
         // Clear unread for the now-visible tab
         if (open) {
             if (tab == 0) clearUnreadChannel()
-            else if (tab == 1 && pmUserId != null) clearUnreadPrivateUser(pmUserId)
+            else if (tab == 1 && pmKey != null) clearUnreadPrivateUser(pmKey)
         }
     }
 
-    fun clearUnreadChannel() { _unreadChannel.value = 0 }
-    fun clearUnreadPrivateUser(userId: Int) {
+    fun clearUnreadChannel() {
+        if (_unreadChannel.value != 0) {
+            _unreadChannel.value = 0
+            scheduleSave()
+        }
+    }
+
+    fun clearUnreadPrivateUser(convKey: String) {
         val unread = _unreadPrivate.value.toMutableMap()
-        unread.remove(userId)
-        _unreadPrivate.value = unread
+        if (unread.remove(convKey) != null) {
+            _unreadPrivate.value = unread
+            scheduleSave()
+        }
     }
 
     fun sendChannelMessage(text: String) {
@@ -744,22 +782,63 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun sendPrivateMessage(userId: Int, text: String) {
+        sendPrivateMessageToConversation(conversationKeyForClid(userId), text)
+    }
+
+    /**
+     * Send into the conversation identified by [convKey]. The peer's current
+     * client id is resolved at send time — a uid-keyed conversation follows
+     * the person across their own reconnects.
+     */
+    fun sendPrivateMessageToConversation(convKey: String, text: String) {
         if (text.isBlank()) return
-        tsClient?.sendPrivateMessage(userId, text)
+        val clid = resolveClid(convKey)
+        if (clid == null) {
+            viewModelScope.launch {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    Toast.makeText(getApplication(), getApplication<Application>().getString(R.string.pm_target_offline), Toast.LENGTH_SHORT).show()
+                }
+            }
+            return
+        }
+        tsClient?.sendPrivateMessage(clid, text)
         val msg = ChatMessage(
-            sender = getApplication<Application>().getString(R.string.me_sender), text = text, isMe = true, isPrivate = true, senderId = userId,
+            sender = getApplication<Application>().getString(R.string.me_sender), text = text, isMe = true, isPrivate = true, senderId = clid,
         )
         val current = _privateMessages.value.toMutableMap()
-        current[userId] = (current[userId] ?: emptyList()) + msg
+        current[convKey] = (current[convKey] ?: emptyList()) + msg
         _privateMessages.value = current
-        pendingOwnEchoes.addLast(PendingEcho("private", userId, text, System.currentTimeMillis()))
+        pendingOwnEchoes.addLast(PendingEcho("private", convKey, text, System.currentTimeMillis()))
         scheduleSave()
+    }
+
+    /** Conversation key for a client id: uid when known, else "clid:<n>". */
+    fun conversationKeyForClid(clid: Int): String {
+        return _rawUsers.value.find { it.id == clid }?.uid?.takeIf { it.isNotEmpty() } ?: "clid:$clid"
+    }
+
+    fun conversationKeyFor(user: User): String {
+        return user.uid?.takeIf { it.isNotEmpty() } ?: "clid:${user.id}"
+    }
+
+    private fun resolveClid(convKey: String): Int? {
+        return if (convKey.startsWith("clid:")) {
+            convKey.removePrefix("clid:").toIntOrNull()
+        } else {
+            _rawUsers.value.find { it.uid == convKey }?.id
+        }
     }
 
     // ── Whisper (密聊) ──────────────────────────────────────────
 
-    fun toggleWhisper(userId: Int) {
-        WhisperManager.toggleWhisper(userId)
+    fun toggleWhisper(clid: Int) {
+        if (_rawUsers.value.none { it.id == clid }) return
+        WhisperManager.toggleWhisper(conversationKeyForClid(clid))
+    }
+
+    /** Top-bar whisper toggle: the stored target is already a conversation key. */
+    fun toggleWhisperKey(targetKey: String) {
+        WhisperManager.toggleWhisper(targetKey)
     }
 
     /** Local user id, or null before the connection is established. */
@@ -774,7 +853,16 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         get() = _users.value.filter { it.id != tsClient?.clientId }
 
     fun moveToChannel(channelId: Long) {
-        tsClient?.moveToChannel(channelId)
+        moveToChannel(channelId, null)
+    }
+
+    fun moveToChannel(channelId: Long, password: String?) {
+        tsClient?.moveToChannel(channelId, password)
+    }
+
+    /** The server info sheet polls counters only while it is open. */
+    fun setServerInfoPolling(enabled: Boolean) {
+        tsClient?.setServerVariablesPolling(enabled)
     }
 
     fun setAudioGain(gain: Float) {
@@ -908,6 +996,33 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * History saved before UID-keying used "clid:<n>" conversation keys,
+     * which fragment whenever the peer reconnects. When the peer is online
+     * we now know the clid→uid mapping, so fold each legacy conversation
+     * into the peer's uid conversation (messages and unread badge).
+     */
+    private fun mergeLegacyConversations(users: List<User>) {
+        val legacyKeys = _privateMessages.value.keys.filter { it.startsWith("clid:") }
+        for (key in legacyKeys) {
+            val clid = key.removePrefix("clid:").toIntOrNull() ?: continue
+            val uid = users.find { it.id == clid }?.uid?.takeIf { it.isNotEmpty() } ?: continue
+
+            val current = _privateMessages.value.toMutableMap()
+            val legacyMsgs = current.remove(key) ?: continue
+            current[uid] = ((current[uid] ?: emptyList()) + legacyMsgs).sortedBy { it.timestamp }
+            _privateMessages.value = current
+
+            val unread = _unreadPrivate.value.toMutableMap()
+            val legacyUnread = unread.remove(key) ?: 0
+            if (legacyUnread > 0) unread[uid] = (unread[uid] ?: 0) + legacyUnread
+            _unreadPrivate.value = unread
+
+            Log.i(TAG, "Merged legacy conversation $key into $uid (${legacyMsgs.size} messages)")
+            scheduleSave()
+        }
+    }
+
     private fun currentChannelId(): Long {
         val myId = tsClient?.clientId ?: return 0
         return _rawUsers.value.find { it.id == myId }?.channelId ?: 0
@@ -930,10 +1045,19 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             (fileDateTime?.let { "&fileDateTime=$it" } ?: "")
     }
 
-    fun uploadAndSendFile(fileName: String, data: ByteArray, isPrivate: Boolean, targetId: Int?) {
+    fun uploadAndSendFile(fileName: String, data: ByteArray, isPrivate: Boolean, targetKey: String?) {
         val client = tsClient ?: return
         val channelId = currentChannelId()
         if (channelId == 0L) return
+        val targetClid = if (isPrivate) targetKey?.let { resolveClid(it) } else null
+        if (isPrivate && targetClid == null) {
+            viewModelScope.launch {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), getApplication<Application>().getString(R.string.pm_target_offline), Toast.LENGTH_SHORT).show()
+                }
+            }
+            return
+        }
         viewModelScope.launch {
             val path = "/$fileName"
             val success = client.uploadFile(channelId, path, data, overwrite = true)
@@ -949,11 +1073,11 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 val attachment = FileAttachment(fileName, data.size.toLong(), fileId = "", isImage, channelId = channelId)
                 val meSender = getApplication<Application>().getString(R.string.me_sender)
 
-                if (isPrivate && targetId != null) {
-                    tsClient?.sendPrivateMessage(targetId, ts3Url)
-                    val msg = ChatMessage(sender = meSender, text = fileName, isMe = true, isPrivate = true, senderId = targetId, fileAttachment = attachment)
+                if (isPrivate && targetClid != null && targetKey != null) {
+                    tsClient?.sendPrivateMessage(targetClid, ts3Url)
+                    val msg = ChatMessage(sender = meSender, text = fileName, isMe = true, isPrivate = true, senderId = targetClid, fileAttachment = attachment)
                     val current = _privateMessages.value.toMutableMap()
-                    current[targetId] = (current[targetId] ?: emptyList()) + msg
+                    current[targetKey] = (current[targetKey] ?: emptyList()) + msg
                     _privateMessages.value = current
                 } else {
                     tsClient?.sendChannelMessage(ts3Url)
@@ -1166,8 +1290,9 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 sender = meSender, text = fileName, isMe = true,
                 isPrivate = true, senderId = targetUserId, fileAttachment = attachment,
             )
+            val convKey = conversationKeyForClid(targetUserId)
             val current = _privateMessages.value.toMutableMap()
-            current[targetUserId] = (current[targetUserId] ?: emptyList()) + msg
+            current[convKey] = (current[convKey] ?: emptyList()) + msg
             _privateMessages.value = current
         } else {
             tsClient?.sendChannelMessage(ts3Url)
@@ -1320,7 +1445,13 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     private fun saveNow() {
         saveJob?.cancel()
         val addr = serverAddress ?: return
-        messageStore.save(addr, _channelMessages.value, _privateMessages.value)
+        messageStore.save(
+            addr,
+            _channelMessages.value,
+            _privateMessages.value,
+            _unreadChannel.value,
+            _unreadPrivate.value,
+        )
     }
 }
 

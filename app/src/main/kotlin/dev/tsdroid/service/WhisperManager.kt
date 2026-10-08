@@ -49,9 +49,12 @@ object WhisperManager {
     var isWhisperActive: Boolean by mutableStateOf(false)
         private set
 
-    /** 当前密聊目标用户的 ID 列表 */
-    private val _whisperTargets = mutableListOf<Int>()
-    val whisperTargets: List<Int> get() = _whisperTargets.toList()
+    /**
+     * 当前密聊目标键列表。键为对端 UID（跨重连稳定）；
+     * 无 UID 的对端退化为 "clid:<n>"。
+     */
+    private val _whisperTargets = mutableListOf<String>()
+    val whisperTargets: List<String> get() = _whisperTargets.toList()
 
     /** 当前密聊目标用户的名称列表（给 UI 渲染） */
     private val _whisperTargetNames = mutableListOf<String>()
@@ -90,24 +93,27 @@ object WhisperManager {
 
     // ── 核心操作 ────────────────────────────────────────────
 
+    /** 会话键：UID 优先，无 UID 退化为 "clid:<n>"。 */
+    private fun keyOf(user: User): String =
+        user.uid?.takeIf { it.isNotEmpty() } ?: "clid:${user.id}"
+
     /**
      * 向指定用户发起密聊。
      *
-     * 优先尝试语音密聊（requestTalkChannel mode=1），
-     * 如果 Rust 层不支持，fallback 到文字 DM。
+     * 语音密聊（requestTalkChannel mode=1）尚未在 Rust 层接线，
+     * 密聊始终以文字私信（DM）方式工作。
      *
-     * @param targetUserId 密聊目标用户的服务器 ID
+     * @param targetKey 目标会话键（UID 或 "clid:<n>"）
      */
-    fun startWhisper(targetUserId: Int) {
+    fun startWhisper(targetKey: String) {
         val client = tsClient ?: run {
             Log.w(TAG, "Cannot whisper: TsClient not initialized")
             return
         }
 
-        val users = client.users.value
-        val targetUser = users.find { it.id == targetUserId }
-        if (targetUser == null) {
-            Log.w(TAG, "Cannot whisper: user $targetUserId not found")
+        val targetUser = client.users.value.find { keyOf(it) == targetKey }
+        if (targetUser == null && targetKey.startsWith("clid:")) {
+            Log.w(TAG, "Cannot whisper: target $targetKey not found")
             return
         }
 
@@ -118,23 +124,23 @@ object WhisperManager {
         }
 
         // 如果已经在密聊此用户，不重复添加
-        if (_whisperTargets.contains(targetUserId)) {
-            Log.d(TAG, "Already whispering to ${targetUser.nickname}")
+        if (_whisperTargets.contains(targetKey)) {
+            Log.d(TAG, "Already whispering to ${targetUser?.nickname ?: targetKey}")
             return
         }
 
-        Log.i(TAG, "Starting whisper to ${targetUser.nickname} (id=$targetUserId)")
+        Log.i(TAG, "Starting whisper to ${targetUser?.nickname ?: targetKey}")
 
         // 语音密聊需要 Rust 层提供 requestTalkChannel 通道，当前未接线，
         // 密聊始终以文字私信（DM）方式工作
         isTextFallback = true
 
         // 更新状态
-        _whisperTargets.add(targetUserId)
-        _whisperTargetNames.add(targetUser.nickname)
+        _whisperTargets.add(targetKey)
+        _whisperTargetNames.add(targetUser?.nickname ?: targetKey)
         isWhisperActive = true
 
-        Log.d(TAG, "Whisper target added: ${targetUser.nickname}")
+        Log.d(TAG, "Whisper target added: ${targetUser?.nickname ?: targetKey}")
     }
 
     /**
@@ -155,24 +161,25 @@ object WhisperManager {
     }
 
     /**
-     * 切换对指定用户的密聊状态。
+     * 切换对指定目标的密聊状态。
      */
-    fun toggleWhisper(userId: Int) {
-        if (_whisperTargets.contains(userId)) {
+    fun toggleWhisper(targetKey: String) {
+        if (_whisperTargets.contains(targetKey)) {
             // 如果正在密聊此用户且是唯一目标 → 结束全部密聊
             // 如果还有其它目标 → 只移除这一个
             if (_whisperTargets.size == 1) {
                 stopWhisper()
             } else {
-                removeTarget(userId)
+                removeTarget(targetKey)
             }
         } else {
-            startWhisper(userId)
+            startWhisper(targetKey)
         }
     }
 
     /**
      * 向当前密聊目标发送一条文字消息（DM 战术降级时使用）。
+     * 目标键在发送时解析为当前在线的客户端编号——对端重连后依然可达。
      */
     fun sendWhisperMessage(text: String) {
         val client = tsClient ?: return
@@ -182,8 +189,14 @@ object WhisperManager {
         isTextFallback = true
 
         // 向所有密聊目标发送私信
-        for (targetId in _whisperTargets) {
-            client.sendPrivateMessage(targetId, text)
+        for (targetKey in _whisperTargets) {
+            val clid = client.users.value.find { keyOf(it) == targetKey }?.id
+                ?: targetKey.removePrefix("clid:").toIntOrNull()
+            if (clid != null) {
+                client.sendPrivateMessage(clid, text)
+            } else {
+                Log.w(TAG, "Whisper target offline: $targetKey")
+            }
         }
 
         Log.d(TAG, "Whisper text sent to ${_whisperTargets.size} targets")
@@ -206,16 +219,16 @@ object WhisperManager {
     // ── 内部方法 ────────────────────────────────────────────
 
     /**
-     * 从密聊目标列表中移除一个用户。
+     * 从密聊目标列表中移除一个目标。
      */
-    private fun removeTarget(userId: Int) {
-        val idx = _whisperTargets.indexOf(userId)
+    private fun removeTarget(targetKey: String) {
+        val idx = _whisperTargets.indexOf(targetKey)
         if (idx >= 0) {
             _whisperTargets.removeAt(idx)
             if (idx < _whisperTargetNames.size) {
                 _whisperTargetNames.removeAt(idx)
             }
-            Log.d(TAG, "Removed whisper target $userId")
+            Log.d(TAG, "Removed whisper target $targetKey")
         }
         if (_whisperTargets.isEmpty()) {
             isWhisperActive = false

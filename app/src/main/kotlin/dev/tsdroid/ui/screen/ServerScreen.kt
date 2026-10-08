@@ -157,37 +157,58 @@ fun ServerScreen(
     val currentFilePath by viewModel.currentFilePath.collectAsStateWithLifecycle()
     val fileManagerLoading by viewModel.fileManagerLoading.collectAsStateWithLifecycle()
     val channelPermissions by viewModel.currentChannelPermissions.collectAsStateWithLifecycle()
+    val qualitySnapshot by viewModel.qualitySnapshot.collectAsStateWithLifecycle()
 
     var chatOpen by remember { mutableStateOf(false) }
     var chatEverOpened by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var chatTab by remember { mutableIntStateOf(0) }
     var messageText by remember { mutableStateOf("") }
-    var pmTargetId by remember { mutableStateOf<Int?>(null) }
+    var pmTargetKey by remember { mutableStateOf<String?>(null) }
+
+    // Password-protected channel the user tapped; non-null shows the dialog
+    var passwordChannelId by remember { mutableStateOf<Long?>(null) }
 
     // Whisper (密聊) state — read directly from WhisperManager
     val whisperTargetNames = WhisperManager.whisperTargetNames
     val whisperFirstTargetName = whisperTargetNames.firstOrNull()
 
-    // Resolve pmTarget User from users list
-    val pmTarget = pmTargetId?.let { id -> users.find { it.id == id } }
-
-    // Build PM conversation user list (id 鈫?name) from message map + users list
+    // Resolve the active PM conversation target display name
     val context = LocalContext.current
-    val pmConversationUsers = remember(privateMessages, users) {
-        privateMessages.keys.map { userId ->
-            val name = users.find { it.id == userId }?.nickname
-                ?: privateMessages[userId]?.lastOrNull { !it.isMe }?.sender
-                ?: context.getString(R.string.user_fallback, userId)
-            userId to name
+    val pmTargetName = pmTargetKey?.let { key ->
+        privateMessages[key]?.lastOrNull { !it.isMe }?.sender
+            ?: when {
+                key.startsWith("clid:") -> key.removePrefix("clid:").toIntOrNull()
+                    ?.let { cid -> users.find { it.id == cid }?.nickname }
+                    ?: context.getString(R.string.user_fallback, key.removePrefix("clid:").toIntOrNull() ?: 0)
+                else -> users.find { it.uid == key }?.nickname
+                    ?: key.take(8) + "…"
+            }
+    }
+
+    // Build PM conversation list (key → display name) from history + users
+    val pmConversations = remember(privateMessages, users) {
+        privateMessages.keys.map { key ->
+            val lastIncoming = privateMessages[key]?.lastOrNull { !it.isMe }?.sender
+            val name = when {
+                !key.startsWith("clid:") ->
+                    users.find { it.uid == key }?.nickname
+                        ?: lastIncoming
+                        ?: key.take(8) + "…"
+                else -> key.removePrefix("clid:").toIntOrNull()
+                    ?.let { cid -> users.find { it.id == cid }?.nickname }
+                    ?: lastIncoming
+                    ?: context.getString(R.string.user_fallback, key.removePrefix("clid:").toIntOrNull() ?: 0)
+            }
+            key to name
         }
     }
 
     val totalUnreadPrivate = unreadPrivate.values.sum()
 
     // Sync chat state to ViewModel for unread tracking
-    LaunchedEffect(chatOpen, chatTab, pmTargetId) {
-        viewModel.setChatState(chatOpen, chatTab, pmTargetId)
+    LaunchedEffect(chatOpen, chatTab, pmTargetKey) {
+        viewModel.setChatState(chatOpen, chatTab, pmTargetKey)
     }
 
     // System back closes the top-most overlay instead of leaving the app
@@ -228,6 +249,19 @@ fun ServerScreen(
         }
     }
     if (sessionClosed) return
+
+    // In-app poke feedback — while the app is in the background the service
+    // posts a heads-up notification instead
+    LaunchedEffect(Unit) {
+        viewModel.pokeEvents.collect { (pokerName, message) ->
+            val text = if (message.isBlank()) {
+                context.getString(R.string.poke_notification_title, pokerName)
+            } else {
+                context.getString(R.string.poke_received_with_message, pokerName, message)
+            }
+            Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+        }
+    }
 
     // Show floating window when entering ServerScreen if enabled
     LaunchedEffect(enableFloatingWindow) {
@@ -389,7 +423,7 @@ fun ServerScreen(
 
                     // Whisper (密聊) indicator — shows active state, click to stop
                     if (WhisperManager.isWhisperActive && whisperFirstTargetName != null) {
-                        IconButton(onClick = { viewModel.toggleWhisper(WhisperManager.whisperTargets.first()) }) {
+                        IconButton(onClick = { viewModel.toggleWhisperKey(WhisperManager.whisperTargets.first()) }) {
                             Icon(
                                 Icons.Default.Forum,
                                 contentDescription = stringResource(R.string.whisper_stop),
@@ -453,11 +487,18 @@ fun ServerScreen(
             ChannelTree(
                 channels = channels,
                 users = users,
-                onChannelClick = { channelId -> viewModel.moveToChannel(channelId) },
+                onChannelClick = { channelId ->
+                    val channel = channels.find { it.id == channelId }
+                    if (channel?.hasPassword == true) {
+                        passwordChannelId = channelId
+                    } else {
+                        viewModel.moveToChannel(channelId)
+                    }
+                },
                 onUserClick = { user ->
                     // No PM to yourself — the click is a no-op on the own row
                     if (user.id != viewModel.myClientId) {
-                        pmTargetId = user.id
+                        pmTargetKey = viewModel.conversationKeyFor(user)
                         chatTab = 1
                         chatOpen = true
                     }
@@ -540,22 +581,22 @@ fun ServerScreen(
                         chatTab = chatTab,
                         onTabChange = { chatTab = it },
                         channelMessages = channelMessages,
-                        privateMessages = pmTargetId?.let { id ->
-                            privateMessages[id] ?: emptyList()
-                        } ?: privateMessages.values.flatten().sortedBy { it.timestamp },
+                        privateMessages = pmTargetKey?.let { privateMessages[it] }
+                            ?: privateMessages.values.flatten().sortedBy { it.timestamp },
                         messageText = messageText,
                         onMessageChange = { messageText = it },
-                        pmTarget = pmTarget,
-                        pmConversationUsers = pmConversationUsers,
-                        onSelectPmUser = { userId -> pmTargetId = userId },
-                        onClearPmTarget = { pmTargetId = null },
+                        pmTargetKey = pmTargetKey,
+                        pmTargetName = pmTargetName,
+                        pmConversations = pmConversations,
+                        onSelectPmUser = { key -> pmTargetKey = key },
+                        onClearPmTarget = { pmTargetKey = null },
                         onSend = {
                             if (WhisperManager.isWhisperActive && whisperFirstTargetName != null) {
                                 viewModel.sendWhisperMessage(messageText)
                             } else {
                                 when (chatTab) {
                                     0 -> viewModel.sendChannelMessage(messageText)
-                                    1 -> pmTargetId?.let { viewModel.sendPrivateMessage(it, messageText) }
+                                    1 -> pmTargetKey?.let { viewModel.sendPrivateMessageToConversation(it, messageText) }
                                 }
                             }
                             messageText = ""
@@ -568,7 +609,7 @@ fun ServerScreen(
                         autoLoadImages = autoLoadImages,
                         canUploadFiles = (channelPermissions and dev.tslib.Channel.PERM_FILE_UPLOAD) != 0L,
                         onUploadFile = { fileName, data ->
-                            viewModel.uploadAndSendFile(fileName, data, chatTab == 1, pmTargetId)
+                            viewModel.uploadAndSendFile(fileName, data, chatTab == 1, pmTargetKey)
                         },
                         onDownload = { attachment -> viewModel.downloadAttachment(attachment) },
                         isWhisperActive = WhisperManager.isWhisperActive,
@@ -608,20 +649,66 @@ fun ServerScreen(
         onPrivateMessage = {
             val id = userPanelUserId
             if (id != null) {
-                pmTargetId = id
-                chatTab = 1
-                chatOpen = true
+                val user = users.find { it.id == id }
+                if (user != null) {
+                    pmTargetKey = viewModel.conversationKeyFor(user)
+                    chatTab = 1
+                    chatOpen = true
+                }
             }
             userPanelUserId = null
         },
         onDismiss = { userPanelUserId = null },
     )
 
+    // Channel password prompt — required before the server accepts the move
+    passwordChannelId?.let { channelId ->
+        val channelName = channels.find { it.id == channelId }?.name ?: ""
+        var channelPassword by remember(channelId) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { passwordChannelId = null },
+            title = { Text(stringResource(R.string.channel_password_title, channelName)) },
+            text = {
+                OutlinedTextField(
+                    value = channelPassword,
+                    onValueChange = { channelPassword = it },
+                    label = { Text(stringResource(R.string.channel_password_label)) },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.moveToChannel(channelId, channelPassword.trim())
+                        passwordChannelId = null
+                    },
+                    enabled = channelPassword.isNotBlank(),
+                ) {
+                    Text(stringResource(R.string.confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { passwordChannelId = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
     if (showServerInfo) {
+        // Polling runs only while the sheet is visible; the first query
+        // fires immediately on open so the numbers aren't connect-time stale
+        LaunchedEffect(showServerInfo) {
+            viewModel.setServerInfoPolling(true)
+        }
         ServerInfoSheet(
             info = serverInfo,
             address = viewModel.connectedAddress,
-            onDismiss = { showServerInfo = false },
+            quality = qualitySnapshot,
+            onDismiss = {
+                viewModel.setServerInfoPolling(false)
+                showServerInfo = false
+            },
         )
     }
 
@@ -659,15 +746,16 @@ fun ChatPanel(
     privateMessages: List<ChatMessage>,
     messageText: String,
     onMessageChange: (String) -> Unit,
-    pmTarget: User?,
-    pmConversationUsers: List<Pair<Int, String>>,
-    onSelectPmUser: (Int) -> Unit,
+    pmTargetKey: String?,
+    pmTargetName: String?,
+    pmConversations: List<Pair<String, String>>,
+    onSelectPmUser: (String) -> Unit,
     onClearPmTarget: () -> Unit,
     onSend: () -> Unit,
     onClose: () -> Unit,
     unreadChannel: Int,
     unreadPrivateTotal: Int,
-    unreadPrivatePerUser: Map<Int, Int>,
+    unreadPrivatePerUser: Map<String, Int>,
     showLinkThumbnails: Boolean,
     autoLoadImages: Boolean = true,
     canUploadFiles: Boolean = true,
@@ -768,7 +856,7 @@ fun ChatPanel(
             }
 
             // PM conversation selector
-            if (chatTab == 1 && pmConversationUsers.isNotEmpty()) {
+            if (chatTab == 1 && pmConversations.isNotEmpty()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -778,23 +866,23 @@ fun ChatPanel(
                 ) {
                     // "All" chip
                     FilterChip(
-                        selected = pmTarget == null,
+                        selected = pmTargetKey == null,
                         onClick = { onClearPmTarget() },
                         label = { Text(stringResource(R.string.filter_all)) },
-                        leadingIcon = if (pmTarget == null) {
+                        leadingIcon = if (pmTargetKey == null) {
                             { Icon(Icons.Default.ChatBubble, null, Modifier.size(16.dp)) }
                         } else null,
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                         ),
                     )
-                    // One chip per conversation user
-                    pmConversationUsers.forEach { (userId, nickname) ->
-                        val isSelected = pmTarget?.id == userId
-                        val userUnread = unreadPrivatePerUser[userId] ?: 0
+                    // One chip per conversation (keyed by peer uid)
+                    pmConversations.forEach { (convKey, nickname) ->
+                        val isSelected = pmTargetKey == convKey
+                        val userUnread = unreadPrivatePerUser[convKey] ?: 0
                         FilterChip(
                             selected = isSelected,
-                            onClick = { onSelectPmUser(userId) },
+                            onClick = { onSelectPmUser(convKey) },
                             label = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(nickname)
@@ -872,7 +960,7 @@ fun ChatPanel(
                 if (canUploadFiles) {
                     IconButton(
                         onClick = { filePickerLauncher.launch("*/*") },
-                        enabled = (chatTab == 0 || pmTarget != null) && !isWhisperActive,
+                        enabled = (chatTab == 0 || pmTargetKey != null) && !isWhisperActive,
                     ) {
                         Icon(Icons.Default.AttachFile, contentDescription = stringResource(R.string.attach_file))
                     }
@@ -887,12 +975,12 @@ fun ChatPanel(
                                 isWhisperActive && whisperTargetName != null ->
                                     stringResource(R.string.whisper_placeholder, whisperTargetName)
                                 chatTab == 0 -> stringResource(R.string.message_channel_placeholder)
-                                else -> stringResource(R.string.message_private_placeholder, pmTarget?.nickname ?: "?")
+                                else -> stringResource(R.string.message_private_placeholder, pmTargetName ?: "?")
                             }
                         )
                     },
                     singleLine = true,
-                    enabled = chatTab == 0 || pmTarget != null || (isWhisperActive && whisperTargetName != null),
+                    enabled = chatTab == 0 || pmTargetKey != null || (isWhisperActive && whisperTargetName != null),
                     colors = OutlinedTextFieldDefaults.colors(
                         unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                         focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -902,7 +990,7 @@ fun ChatPanel(
                 )
                 IconButton(
                     onClick = onSend,
-                    enabled = messageText.isNotBlank() && (chatTab == 0 || pmTarget != null || (isWhisperActive && whisperTargetName != null)),
+                    enabled = messageText.isNotBlank() && (chatTab == 0 || pmTargetKey != null || (isWhisperActive && whisperTargetName != null)),
                 ) {
                     Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.send))
                 }

@@ -15,26 +15,36 @@ class MessageStore(private val context: Context) {
 
     private val messagesDir = File(context.filesDir, "messages")
 
-    fun load(serverAddress: String): Pair<List<ChatMessage>, Map<Int, List<ChatMessage>>> {
+    /** Persisted chat history plus the unread counters that go with it.
+     *  Private conversations are keyed by peer uid (or synthetic "clid:<n>"). */
+    data class StoredMessages(
+        val channelMessages: List<ChatMessage> = emptyList(),
+        val privateMessages: Map<String, List<ChatMessage>> = emptyMap(),
+        val unreadChannel: Int = 0,
+        val unreadPrivate: Map<String, Int> = emptyMap(),
+    )
+
+    fun load(serverAddress: String): StoredMessages {
         val file = fileFor(serverAddress)
-        if (!file.exists()) return Pair(emptyList(), emptyMap())
+        if (!file.exists()) return StoredMessages()
         return try {
-            val json = file.readText()
-            parseServerMessages(json)
+            parseServerMessages(file.readText())
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load messages for $serverAddress", e)
-            Pair(emptyList(), emptyMap())
+            StoredMessages()
         }
     }
 
     fun save(
         serverAddress: String,
         channelMessages: List<ChatMessage>,
-        privateMessages: Map<Int, List<ChatMessage>>,
+        privateMessages: Map<String, List<ChatMessage>>,
+        unreadChannel: Int,
+        unreadPrivate: Map<String, Int>,
     ) {
         try {
             messagesDir.mkdirs()
-            val json = serializeServerMessages(channelMessages, privateMessages)
+            val json = serializeServerMessages(channelMessages, privateMessages, unreadChannel, unreadPrivate)
             fileFor(serverAddress).writeText(json)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save messages for $serverAddress", e)
@@ -53,19 +63,29 @@ class MessageStore(private val context: Context) {
 
     private fun serializeServerMessages(
         channel: List<ChatMessage>,
-        private_: Map<Int, List<ChatMessage>>,
+        private_: Map<String, List<ChatMessage>>,
+        unreadChannel: Int,
+        unreadPrivate: Map<String, Int>,
     ): String {
         val root = org.json.JSONObject()
         val channelArr = org.json.JSONArray()
         channel.takeLast(MAX_MESSAGES).forEach { channelArr.put(toJson(it)) }
         root.put("channel", channelArr)
         val privateObj = org.json.JSONObject()
-        for ((userId, msgs) in private_) {
+        for ((convKey, msgs) in private_) {
             val arr = org.json.JSONArray()
             msgs.takeLast(MAX_MESSAGES).forEach { arr.put(toJson(it)) }
-            privateObj.put(userId.toString(), arr)
+            privateObj.put(convKey, arr)
         }
         root.put("private", privateObj)
+        // Unread counts are persisted alongside the messages so a reconnect
+        // restores the badges exactly as they were left
+        root.put("unreadChannel", unreadChannel)
+        val unreadObj = org.json.JSONObject()
+        for ((convKey, count) in unreadPrivate) {
+            unreadObj.put(convKey, count)
+        }
+        root.put("unreadPrivate", unreadObj)
         return root.toString()
     }
 
@@ -93,8 +113,8 @@ class MessageStore(private val context: Context) {
 
     // --- Parsing ---
 
-    private fun parseServerMessages(json: String): Pair<List<ChatMessage>, Map<Int, List<ChatMessage>>> {
-        if (json.isBlank()) return Pair(emptyList(), emptyMap())
+    private fun parseServerMessages(json: String): StoredMessages {
+        if (json.isBlank()) return StoredMessages()
         return try {
             val root = org.json.JSONObject(json)
             val channelMessages = mutableListOf<ChatMessage>()
@@ -103,23 +123,40 @@ class MessageStore(private val context: Context) {
                     fromJson(arr.getJSONObject(i), isPrivate = false)?.let { channelMessages.add(it) }
                 }
             }
-            val privateMessages = mutableMapOf<Int, List<ChatMessage>>()
+            val privateMessages = mutableMapOf<String, List<ChatMessage>>()
             root.optJSONObject("private")?.let { obj ->
                 for (key in obj.keys()) {
-                    val userId = key.toIntOrNull() ?: continue
                     val arr = obj.optJSONArray(key) ?: continue
                     val msgs = mutableListOf<ChatMessage>()
                     for (i in 0 until arr.length()) {
                         fromJson(arr.getJSONObject(i), isPrivate = true)?.let { msgs.add(it) }
                     }
-                    privateMessages[userId] = msgs
+                    privateMessages[migrateConvKey(key)] = msgs
                 }
             }
-            Pair(channelMessages, privateMessages)
+            val unreadPrivate = mutableMapOf<String, Int>()
+            root.optJSONObject("unreadPrivate")?.let { obj ->
+                for (key in obj.keys()) {
+                    val count = obj.optInt(key, 0)
+                    if (count > 0) unreadPrivate[migrateConvKey(key)] = count
+                }
+            }
+            StoredMessages(
+                channelMessages = channelMessages,
+                privateMessages = privateMessages,
+                unreadChannel = root.optInt("unreadChannel", 0),
+                unreadPrivate = unreadPrivate,
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse message history", e)
-            Pair(emptyList(), emptyMap())
+            StoredMessages()
         }
+    }
+
+    /** Old format keyed private chats by session client id (a bare number);
+     *  new format keys by peer uid or a synthetic "clid:<n>". */
+    private fun migrateConvKey(key: String): String {
+        return key.toIntOrNull()?.let { "clid:$it" } ?: key
     }
 
     private fun fromJson(o: org.json.JSONObject, isPrivate: Boolean): ChatMessage? {

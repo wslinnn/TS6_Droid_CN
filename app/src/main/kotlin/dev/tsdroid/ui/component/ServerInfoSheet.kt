@@ -16,15 +16,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import dev.tsdroid.bridge.QualitySnapshot
 import dev.tsdroid.han.R
 import dev.tslib.BBCode
 import dev.tslib.ServerInfo
+import java.util.Locale
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ServerInfoSheet(
     info: ServerInfo?,
     address: String?,
+    quality: QualitySnapshot?,
     onDismiss: () -> Unit,
 ) {
     if (info == null) return
@@ -57,6 +61,41 @@ fun ServerInfoSheet(
             )
             InfoRow(stringResource(R.string.server_channels), info.channelsOnline.toString())
             InfoRow(stringResource(R.string.server_uptime), formatUptime(info.uptime))
+
+            // Connection quality section — the debug view of the adaptive
+            // audio loop; sampling runs while the session is connected
+            quality?.let { q ->
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                Text(
+                    text = stringResource(R.string.quality_section),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                InfoRow(
+                    stringResource(R.string.quality_rtt),
+                    stringResource(
+                        R.string.quality_rtt_format,
+                        q.rttMedianMs.roundToInt(),
+                        q.rttP95Ms.roundToInt(),
+                    ),
+                )
+                InfoRow(
+                    stringResource(R.string.quality_jitter),
+                    String.format(Locale.US, "%.0f ms", q.rttDevMs),
+                )
+                InfoRow(
+                    stringResource(R.string.quality_loss),
+                    String.format(Locale.US, "%.1f%%", q.packetLoss * 100f),
+                )
+                InfoRow(
+                    stringResource(R.string.quality_bandwidth),
+                    stringResource(
+                        R.string.quality_bandwidth_format,
+                        formatKbps(q.bytesReceivedPerSec),
+                        formatKbps(q.bytesSentPerSec),
+                    ),
+                )
+            }
 
             val welcome = info.welcomeMessage?.takeIf { it.isNotBlank() }?.let {
                 try { BBCode.strip(it) } catch (_: Throwable) { it }
@@ -102,4 +141,8 @@ private fun formatUptime(seconds: Long): String {
         hours > 0 -> "${hours}h ${minutes}m"
         else -> "${minutes}m"
     }
+}
+
+private fun formatKbps(bytesPerSecond: Long): String {
+    return String.format(Locale.US, "%.0f", bytesPerSecond / 1024.0)
 }
