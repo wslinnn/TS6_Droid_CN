@@ -70,6 +70,40 @@ public class OpusCodec implements AutoCloseable {
         return nativeGetConfig(nativePtr);
     }
 
+    /**
+     * Change the encoder bitrate at runtime (adaptive bitrate on weak networks).
+     *
+     * @param bitrate target bitrate in bits per second
+     * @throws TsLibException on error
+     */
+    public void setBitrate(int bitrate) {
+        checkNotClosed();
+        nativeSetBitrate(nativePtr, bitrate);
+    }
+
+    /**
+     * Toggle inband forward error correction (helps the decoder reconstruct
+     * frames lost in transit, at the cost of extra bitrate).
+     *
+     * @throws TsLibException on error
+     */
+    public void setFec(boolean enabled) {
+        checkNotClosed();
+        nativeSetFec(nativePtr, enabled);
+    }
+
+    /**
+     * Tell the encoder which packet loss percentage to optimize its FEC
+     * redundancy for.
+     *
+     * @param percent expected loss, 0–100
+     * @throws TsLibException on error
+     */
+    public void setExpectedPacketLoss(int percent) {
+        checkNotClosed();
+        nativeSetExpectedPacketLoss(nativePtr, percent);
+    }
+
     @Override
     public void close() {
         if (nativePtr != 0) {
@@ -91,4 +125,7 @@ public class OpusCodec implements AutoCloseable {
     private static native byte[] nativeEncode(long ptr, byte[] pcm);
     private static native byte[] nativeDecode(long ptr, byte[] data);
     private static native AudioConfig nativeGetConfig(long ptr);
+    private static native void nativeSetBitrate(long ptr, int bitrate);
+    private static native void nativeSetFec(long ptr, boolean enabled);
+    private static native void nativeSetExpectedPacketLoss(long ptr, int percent);
 }

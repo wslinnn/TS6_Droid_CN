@@ -210,8 +210,31 @@ public class Client implements AutoCloseable {
      * @throws TsLibException on error
      */
     public void moveToChannel(long channelId) {
+        moveToChannel(channelId, null);
+    }
+
+    /**
+     * Move to a (possibly password-protected) channel.
+     *
+     * @param channelId target channel ID
+     * @param password  channel password (may be {@code null})
+     * @throws TsLibException on error
+     */
+    public void moveToChannel(long channelId, String password) {
         checkNotClosed();
-        nativeMoveToChannel(nativePtr, channelId);
+        nativeMoveToChannel(nativePtr, channelId, password);
+    }
+
+    /**
+     * Snapshot of connection quality metrics from the UDP layer.
+     *
+     * @return {@code double[]{rttMs, rttDevMs, packetLoss, packetLossIn,
+     *         bytesRecvPerSec, bytesSentPerSec, lossObservedTotal}}, or
+     *         {@code null} while not connected
+     */
+    public double[] getNetworkStats() {
+        checkNotClosed();
+        return nativeGetNetworkStats(nativePtr);
     }
 
     /**
@@ -222,6 +245,18 @@ public class Client implements AutoCloseable {
     public void syncState() {
         checkNotClosed();
         nativeSyncState(nativePtr);
+    }
+
+    /**
+     * Re-request server variables (online counters, uptime). The server
+     * only answers with a {@code notifyserverupdated} when asked, so this
+     * must be polled to keep the local snapshot current.
+     *
+     * @throws TsLibException on error
+     */
+    public void updateServerVariables() {
+        checkNotClosed();
+        nativeUpdateServerVariables(nativePtr);
     }
 
     /**
@@ -353,8 +388,10 @@ public class Client implements AutoCloseable {
     private static native void nativeSendServerMessage(long ptr, String msg);
     private static native void nativeSendChannelMessage(long ptr, String msg);
     private static native void nativeSendPrivateMessage(long ptr, int userId, String msg);
-    private static native void nativeMoveToChannel(long ptr, long channelId);
+    private static native void nativeMoveToChannel(long ptr, long channelId, String password);
+    private static native double[] nativeGetNetworkStats(long ptr);
     private static native void nativeSyncState(long ptr);
+    private static native void nativeUpdateServerVariables(long ptr);
     private static native void nativeSetInputMuted(long ptr, boolean muted);
     private static native void nativeSendAudio(long ptr, byte[] data, int codec);
     private static native void nativeDownloadFile(long ptr, long channelId, String path);
