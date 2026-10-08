@@ -9,6 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
@@ -19,6 +20,7 @@ import dev.tsdroid.ui.theme.TsDroidTheme
 import dev.tsdroid.ui.screen.AppNavigation
 import dev.tsdroid.ui.screen.SplashScreen
 import dev.tsdroid.ui.component.AnimeWallpaperState
+import dev.tsdroid.ui.component.CrashReportOverlay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -58,12 +60,15 @@ class MainActivity : ComponentActivity() {
             val seedColor = AnimeWallpaperState.dominantColor.value
 
             TsDroidTheme(seedColor = if (showSplash) null else seedColor) {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    if (showSplash) {
-                        SplashScreen(onReady = { showSplash = false })
-                    } else {
-                        AppNavigation()
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Surface(modifier = Modifier.fillMaxSize()) {
+                        if (showSplash) {
+                            SplashScreen(onReady = { showSplash = false })
+                        } else {
+                            AppNavigation()
+                        }
                     }
+                    CrashReportOverlay()
                 }
             }
         }

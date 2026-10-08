@@ -4,7 +4,9 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Bundle
+import android.util.Log
 import dev.tsdroid.han.R
+import java.io.File
 
 class TsDroidApp : Application() {
 
@@ -22,9 +24,23 @@ class TsDroidApp : Application() {
     }
 
     override fun onCreate() {
+        // 崩溃陷阱：未捕获异常的堆栈写入 filesDir/last_crash.txt，下次启动在
+        // 界面上展示并可一键复制（无 adb 环境时也能拿到闪退原因）。
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            runCatching {
+                File(filesDir, "last_crash.txt").writeText(
+                    buildString {
+                        appendLine("thread=${thread.name}")
+                        appendLine(Log.getStackTraceString(throwable))
+                    },
+                )
+            }
+            previous?.uncaughtException(thread, throwable)
+        }
         super.onCreate()
         createNotificationChannels()
-        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+        registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: android.app.Activity) {
                 startedActivities++
             }

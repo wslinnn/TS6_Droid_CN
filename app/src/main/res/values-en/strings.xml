@@ -210,6 +210,9 @@
     <string name="poke_notification_no_message">(no message attached)</string>
     <string name="poke_received_with_message">%1$s poked you: %2$s</string>
     <string name="pm_target_offline">Peer is currently offline</string>
+    <string name="crash_report_title">Previous abnormal exit detected</string>
+    <string name="common_copy">Copy</string>
+    <string name="common_copied">Copied</string>
 
     <!-- Channel password -->
     <string name="channel_password_title">Password required for “%1$s”</string>

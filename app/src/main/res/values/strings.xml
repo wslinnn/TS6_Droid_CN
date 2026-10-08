@@ -210,6 +210,9 @@
     <string name="poke_notification_no_message">(aucun message joint)</string>
     <string name="poke_received_with_message">%1$s vous a poké : %2$s</string>
     <string name="pm_target_offline">Correspondant hors ligne</string>
+    <string name="crash_report_title">Fermeture anormale détectée</string>
+    <string name="common_copy">Copier</string>
+    <string name="common_copied">Copié</string>
 
     <!-- Mot de passe du canal -->
     <string name="channel_password_title">Mot de passe requis pour « %1$s »</string>

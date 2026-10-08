@@ -209,6 +209,9 @@
     <string name="poke_notification_no_message">（无附带消息）</string>
     <string name="poke_received_with_message">%1$s 戳了戳你：%2$s</string>
     <string name="pm_target_offline">对方当前不在线，无法发送</string>
+    <string name="crash_report_title">检测到上次异常退出</string>
+    <string name="common_copy">复制</string>
+    <string name="common_copied">已复制</string>
 
     <!-- 频道密码 -->
     <string name="channel_password_title">加入「%1$s」需要密码</string>
