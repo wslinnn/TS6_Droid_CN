@@ -48,6 +48,9 @@ class TsClient {
         private const val DISCONNECT_MIN_FLUSH_MS = 500L
         private const val DISCONNECT_MAX_FLUSH_MS = 2_000L
         private const val DISCONNECT_POLL_MS = 20L
+
+        /** How often to re-request server variables (online counts, uptime). */
+        private const val SERVER_VARIABLES_INTERVAL_MS = 5_000L
     }
 
     @Volatile
@@ -123,7 +126,11 @@ class TsClient {
             try {
                 stopEventLoop()
                 val hadExistingClient = disconnectOnNativeThread()
-                
+                // Drop chat events replayed from the previous session: a UI
+                // (re)subscriber after reconnect would otherwise re-process
+                // old messages and count already-read ones as unread again
+                _chatEvents.resetReplayCache()
+
                 delay(if (hadExistingClient) RECONNECT_AFTER_DISCONNECT_DELAY_MS else INITIAL_CONNECT_SETTLE_MS)
 
                 _state.value = ConnectionState.CONNECTING
@@ -237,6 +244,17 @@ class TsClient {
         return false
     }
 
+    @Volatile private var pollServerVariables = false
+
+    /**
+     * Enable the periodic server-variables poll. Only the open server info
+     * sheet turns this on — desktop clients likewise query only while the
+     * connection info dialog is visible.
+     */
+    fun setServerVariablesPolling(enabled: Boolean) {
+        pollServerVariables = enabled
+    }
+
     fun startEventLoop() {
         // 1. Cancel any active event loop cleanly first
         stopEventLoop()
@@ -246,6 +264,7 @@ class TsClient {
             try {
                 var refreshCounter = 0
                 var lastEventAt = 0L
+                var lastServerVarsAt = 0L
                 while (isActive && client != null) {
                     ensureActive()
                     try {
@@ -263,6 +282,18 @@ class TsClient {
                         if (events.isNotEmpty() || refreshCounter >= 25) {
                             refreshState()
                             refreshCounter = 0
+                        }
+                        // The server only pushes counter/uptime updates when
+                        // asked — poll while the info sheet is open so its
+                        // values don't freeze at connect-time numbers
+                        val now = System.currentTimeMillis()
+                        if (pollServerVariables && now - lastServerVarsAt >= SERVER_VARIABLES_INTERVAL_MS) {
+                            lastServerVarsAt = now
+                            try {
+                                c.updateServerVariables()
+                            } catch (e: Throwable) {
+                                Log.w(TAG, "updateServerVariables failed", e)
+                            }
                         }
                     } catch (e: Throwable) {
                         if (e is CancellationException) throw e
@@ -490,8 +521,27 @@ class TsClient {
     }
 
     fun moveToChannel(channelId: Long) {
+        moveToChannel(channelId, null)
+    }
+
+    fun moveToChannel(channelId: Long, password: String?) {
         launchNativeCommand("moveToChannel") {
-            this.moveToChannel(channelId)
+            this.moveToChannel(channelId, password)
+        }
+    }
+
+    /**
+     * Snapshot of connection quality from the native UDP layer
+     * (rtt/rtt-dev in ms, loss fractions, per-second byte counts),
+     * or null while not connected.
+     */
+    suspend fun getNetworkStats(): DoubleArray? = withContext(nativeDispatcher) {
+        try {
+            client?.getNetworkStats()
+        } catch (e: Throwable) {
+            if (e is CancellationException) throw e
+            Log.w(TAG, "getNetworkStats failed", e)
+            null
         }
     }
 
