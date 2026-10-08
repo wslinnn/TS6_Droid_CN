@@ -203,6 +203,27 @@
     <string name="error_not_connected">Non connecté au serveur</string>
     <string name="download_failed">Échec du téléchargement</string>
 
+    <!-- Poke -->
+    <string name="channel_poke">Pokes</string>
+    <string name="channel_poke_desc">Alertes quand un autre utilisateur vous poke</string>
+    <string name="poke_notification_title">%1$s vous a poké</string>
+    <string name="poke_notification_no_message">(aucun message joint)</string>
+    <string name="poke_received_with_message">%1$s vous a poké : %2$s</string>
+    <string name="pm_target_offline">Correspondant hors ligne</string>
+
+    <!-- Mot de passe du canal -->
+    <string name="channel_password_title">Mot de passe requis pour « %1$s »</string>
+    <string name="channel_password_label">Mot de passe du canal</string>
+
+    <!-- Qualité de connexion -->
+    <string name="quality_section">Qualité de connexion</string>
+    <string name="quality_rtt">Latence aller-retour (médiane / p95)</string>
+    <string name="quality_rtt_format">%1$d ms · p95 %2$d ms</string>
+    <string name="quality_jitter">Gigue</string>
+    <string name="quality_loss">Perte de paquets (5 s)</string>
+    <string name="quality_bandwidth">Bande passante</string>
+    <string name="quality_bandwidth_format">↓ %1$s · ↑ %2$s Ko/s</string>
+
     <!-- AboutScreen -->
     <string name="about_software">À propos</string>
     <string name="about_back">← Retour</string>

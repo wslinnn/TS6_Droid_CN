@@ -202,6 +202,27 @@
     <string name="error_not_connected">未连接到服务器</string>
     <string name="download_failed">下载失败</string>
 
+    <!-- Poke（戳一戳） -->
+    <string name="channel_poke">戳一戳</string>
+    <string name="channel_poke_desc">其他用户戳一戳（poke）时的提醒</string>
+    <string name="poke_notification_title">%1$s 戳了戳你</string>
+    <string name="poke_notification_no_message">（无附带消息）</string>
+    <string name="poke_received_with_message">%1$s 戳了戳你：%2$s</string>
+    <string name="pm_target_offline">对方当前不在线，无法发送</string>
+
+    <!-- 频道密码 -->
+    <string name="channel_password_title">加入「%1$s」需要密码</string>
+    <string name="channel_password_label">频道密码</string>
+
+    <!-- 连接质量 -->
+    <string name="quality_section">连接质量</string>
+    <string name="quality_rtt">往返延迟（中位 / p95）</string>
+    <string name="quality_rtt_format">%1$d ms · p95 %2$d ms</string>
+    <string name="quality_jitter">抖动</string>
+    <string name="quality_loss">丢包率（近 5 秒）</string>
+    <string name="quality_bandwidth">带宽</string>
+    <string name="quality_bandwidth_format">↓ %1$s · ↑ %2$s KB/s</string>
+
     <!-- AboutScreen -->
     <string name="about_software">关于软件</string>
     <string name="about_back">← 返回</string>

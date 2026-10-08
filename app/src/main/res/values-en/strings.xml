@@ -203,6 +203,27 @@
     <string name="error_not_connected">Not connected to the server</string>
     <string name="download_failed">Download failed</string>
 
+    <!-- Poke -->
+    <string name="channel_poke">Pokes</string>
+    <string name="channel_poke_desc">Alerts when other users poke you</string>
+    <string name="poke_notification_title">%1$s poked you</string>
+    <string name="poke_notification_no_message">(no message attached)</string>
+    <string name="poke_received_with_message">%1$s poked you: %2$s</string>
+    <string name="pm_target_offline">Peer is currently offline</string>
+
+    <!-- Channel password -->
+    <string name="channel_password_title">Password required for “%1$s”</string>
+    <string name="channel_password_label">Channel password</string>
+
+    <!-- Connection quality -->
+    <string name="quality_section">Connection quality</string>
+    <string name="quality_rtt">Round-trip time (median / p95)</string>
+    <string name="quality_rtt_format">%1$d ms · p95 %2$d ms</string>
+    <string name="quality_jitter">Jitter</string>
+    <string name="quality_loss">Packet loss (last 5s)</string>
+    <string name="quality_bandwidth">Bandwidth</string>
+    <string name="quality_bandwidth_format">↓ %1$s · ↑ %2$s KB/s</string>
+
     <!-- AboutScreen -->
     <string name="about_software">About</string>
     <string name="about_back">← Back</string>
