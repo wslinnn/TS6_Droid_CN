@@ -1,9 +1,15 @@
 package dev.tsdroid.service
 
 import android.graphics.PixelFormat
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkRequest
+import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
@@ -58,6 +64,7 @@ import dev.tsdroid.han.R
 import dev.tsdroid.TsDroidApp
 import dev.tsdroid.bridge.AudioBridge
 import dev.tsdroid.bridge.AvatarCache
+import dev.tsdroid.bridge.QualityMonitor
 import dev.tsdroid.bridge.TsClient
 import dev.tsdroid.data.SettingsStore
 import dev.tslib.Identity
@@ -90,6 +97,12 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         private const val ACTION_DISCONNECT = "com.wslinnn.ts6mobile.DISCONNECT"
         private const val ACTION_TOGGLE_MUTE = "com.wslinnn.ts6mobile.TOGGLE_MUTE"
         private const val SPEAKER_DELAY_MS = 500L
+
+        /** Poke notifications get unique ids above the fixed connection one. */
+        private const val POKE_NOTIFICATION_BASE_ID = 1000
+
+        /** Reconnect at most once per burst of network-change callbacks. */
+        private const val NETWORK_RECONNECT_DEBOUNCE_MS = 5_000L
 
         var instance: TsConnectionService? = null
             private set
@@ -143,10 +156,33 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
     /** True while the service is disconnecting and about to stop itself. */
     val isShuttingDown: Boolean get() = isStopping
 
-    // Parameters of the last connect() call, used by reconnect()
+    /** Connection quality sampling + loss-driven Opus adaptation. */
+    lateinit var qualityMonitor: QualityMonitor
+        private set
+
+    // A foreground service does not keep the CPU awake: without these locks
+    // the process starves under Doze once the screen goes off, the server
+    // times our session out, and audio dies until a manual reconnect
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+
+    /** Parameters of the last connect() call, used by reconnect() */
     private var lastConnectAddress: String? = null
     private var lastConnectNickname: String? = null
     private var lastConnectPassword: String? = null
+
+    // Network-switch handling: a WiFi↔cellular switch kills the UDP session
+    // but the client only notices after a timeout — reconnect immediately
+    @Volatile private var isReconnectingForNetworkSwitch = false
+    private var lastNetworkSwitchReconnectAt = 0L
+    private val connectivityManager by lazy {
+        getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    }
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            serviceScope.launch { forceImmediateReconnect() }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -159,7 +195,18 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         avatarCache = AvatarCache(applicationContext.cacheDir)
         audioBridge = AudioBridge(applicationContext, tsClient)
         audioBridge.initialize()
-        
+        qualityMonitor = QualityMonitor(tsClient, audioBridge) {
+            serviceScope.launch { forceImmediateReconnect() }
+        }
+        try {
+            connectivityManager.registerNetworkCallback(
+                NetworkRequest.Builder().build(),
+                networkCallback,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Network callback registration failed; falling back to timeout reconnect", e)
+        }
+
         // Load saved floating window position
         loadSavedPosition()
 
@@ -175,6 +222,11 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                         val bytes = ByteArray(data.size) { (data[it] as? Number)?.toByte() ?: 0 }
                         audioBridge.playAudio(userId, bytes)
                     }
+                }
+                "poked" -> {
+                    val pokerName = event.data["poker_name"] as? String ?: return@onEach
+                    val message = event.data["message"] as? String ?: ""
+                    showPokeNotification(pokerName, message)
                 }
                 "talk_status_start" -> {
                     val speakerId = (event.data["user_id"] as? Number)?.toInt()
@@ -223,6 +275,11 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
 
         tsClient.state.onEach { state ->
             overlayConnected = state == dev.tslib.ConnectionState.CONNECTED
+            if (state == dev.tslib.ConnectionState.CONNECTED) {
+                qualityMonitor.start(serviceScope)
+            } else {
+                qualityMonitor.stop()
+            }
             updateOverlayChannelName()
             updateNotification()
         }.launchIn(serviceScope)
@@ -359,6 +416,91 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
             .build()
     }
 
+    /**
+     * Heads-up poke notification on its own channel. The UI already shows
+     * in-app feedback while the app is foreground; this covers the case
+     * where the poke arrives while the app is in the background.
+     */
+    private fun showPokeNotification(pokerName: String, message: String) {
+        if (TsDroidApp.isAppForeground) return
+        val contentIntent = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(this, TsDroidApp.CHANNEL_ID_POKE)
+            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setContentTitle(getString(R.string.poke_notification_title, pokerName))
+            .setContentText(message.ifBlank { getString(R.string.poke_notification_no_message) })
+            .setStyle(
+                NotificationCompat.BigTextStyle()
+                    .bigText(message.ifBlank { getString(R.string.poke_notification_no_message) })
+            )
+            .setContentIntent(contentIntent)
+            .setAutoCancel(true)
+            .build()
+        val id = (POKE_NOTIFICATION_BASE_ID + System.currentTimeMillis() % 100_000).toInt()
+        try {
+            getSystemService(NotificationManager::class.java).notify(id, notification)
+        } catch (e: Exception) {
+            Log.w(TAG, "Poke notification failed", e)
+        }
+    }
+
+    /**
+     * Tear down and reconnect right away. Two triggers share this path:
+     * a network availability change (WiFi↔cellular switch) and the quality
+     * monitor declaring the link dead (no inbound traffic while still
+     * nominally connected, e.g. after a Doze starvation episode).
+     */
+    private suspend fun forceImmediateReconnect() {
+        if (isStopping || isReconnectingForNetworkSwitch) return
+        if (lastConnectAddress == null) return // never connected — nothing to restore
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastNetworkSwitchReconnectAt < NETWORK_RECONNECT_DEBOUNCE_MS) return
+        if (!tsClient.isConnected) return // auto-reconnect path owns the down case
+        lastNetworkSwitchReconnectAt = now
+        isReconnectingForNetworkSwitch = true
+        try {
+            Log.i(TAG, "Forcing immediate reconnect (network change or dead link)")
+            val failure = reconnect()
+            if (failure != null) {
+                Log.w(TAG, "Forced reconnect failed (auto reconnect will retry)", failure)
+            }
+        } finally {
+            isReconnectingForNetworkSwitch = false
+        }
+    }
+
+    /** Hold CPU + high-priority wifi access for the duration of the session. */
+    private fun acquireVoiceLocks() {
+        if (wakeLock == null) {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ts6mobile:voice").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }
+        if (wifiLock == null) {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "ts6mobile:voice-wifi").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }
+    }
+
+    private fun releaseVoiceLocks() {
+        try {
+            wakeLock?.release()
+        } catch (_: Exception) {}
+        wakeLock = null
+        try {
+            wifiLock?.release()
+        } catch (_: Exception) {}
+        wifiLock = null
+    }
+
     fun hasActiveConnection(address: String? = null): Boolean {
         return !isStopping &&
             tsClient.isConnected &&
@@ -376,6 +518,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         lastConnectPassword = password
         return try {
             tsClient.connect(address, identity, nickname, password)
+            acquireVoiceLocks()
             audioBridge.startCapture(
                 serviceScope,
                 SettingsStore(applicationContext).noiseSuppression.first(),
@@ -442,12 +585,14 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         if (instance == this) {
             instance = null
         }
+        releaseVoiceLocks()
         hideFloatingWindow()
         audioBridge.stopCapture()
         WhisperManager.reset()
     }
 
     private fun cleanupFailedConnection() {
+        releaseVoiceLocks()
         hideFloatingWindow()
         audioBridge.stopCapture()
         WhisperManager.reset()
@@ -688,6 +833,13 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
     override fun onDestroy() {
         instance = null
         serviceViewModelStore.clear()
+        try {
+            connectivityManager.unregisterNetworkCallback(networkCallback)
+        } catch (e: Exception) {
+            Log.w(TAG, "Network callback unregistration failed", e)
+        }
+        if (::qualityMonitor.isInitialized) qualityMonitor.stop()
+        releaseVoiceLocks()
         hideFloatingWindow()
         audioBridge.stopCapture()
         WhisperManager.reset()

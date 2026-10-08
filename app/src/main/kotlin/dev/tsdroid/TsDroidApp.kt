@@ -3,12 +3,18 @@ package dev.tsdroid
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.os.Bundle
 import dev.tsdroid.han.R
 
 class TsDroidApp : Application() {
 
     companion object {
         const val CHANNEL_ID_CONNECTION = "ts_connection"
+        const val CHANNEL_ID_POKE = "ts_poke"
+
+        /** Activities currently started — pokes only notify when none exist. */
+        private var startedActivities = 0
+        val isAppForeground: Boolean get() = startedActivities > 0
 
         init {
             System.loadLibrary("tslib_jni")
@@ -18,17 +24,45 @@ class TsDroidApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityStarted(activity: android.app.Activity) {
+                startedActivities++
+            }
+
+            override fun onActivityStopped(activity: android.app.Activity) {
+                startedActivities = (startedActivities - 1).coerceAtLeast(0)
+            }
+
+            override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: Bundle?) {}
+            override fun onActivityResumed(activity: android.app.Activity) {}
+            override fun onActivityPaused(activity: android.app.Activity) {}
+            override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: Bundle) {}
+            override fun onActivityDestroyed(activity: android.app.Activity) {}
+        })
     }
 
     private fun createNotificationChannels() {
-        val channel = NotificationChannel(
+        val manager = getSystemService(NotificationManager::class.java)
+
+        val connection = NotificationChannel(
             CHANNEL_ID_CONNECTION,
             getString(R.string.channel_connection),
             NotificationManager.IMPORTANCE_LOW
         ).apply {
             description = getString(R.string.channel_connection_desc)
         }
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
+        manager.createNotificationChannel(connection)
+
+        // Own channel so the user can mute pokes (or DND rules apply to them)
+        // independently of the permanent connection notification; HIGH makes
+        // them heads-up like they deserve as a social attention signal
+        val poke = NotificationChannel(
+            CHANNEL_ID_POKE,
+            getString(R.string.channel_poke),
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = getString(R.string.channel_poke_desc)
+        }
+        manager.createNotificationChannel(poke)
     }
 }
