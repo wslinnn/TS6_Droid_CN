@@ -10,7 +10,11 @@ datastore = "1.1.1"
 coroutines = "1.9.0"
 coil = "2.7.0"
 junit = "4.13.2"
-mikepenzMarkdown = "0.35.0"
+# Pinned: 0.34+ calls BasicText-CL7eQgs (compose-foundation 1.8 signature) and
+# crashes with NoSuchMethodError on our compose BOM 2024.12.01 (foundation 1.7.6)
+# the moment the update dialog renders. 0.33.0 is the newest version compatible
+# with foundation 1.7.x. Re-check if the compose BOM is ever upgraded.
+mikepenzMarkdown = "0.33.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
