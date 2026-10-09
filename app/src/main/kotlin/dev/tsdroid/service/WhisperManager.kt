@@ -11,8 +11,9 @@ import dev.tslib.User
  * 密聊 (Whisper) 单例状态管理器。
  *
  * 管理向特定用户进行密聊的状态。
- * 当语音密聊不可用时（目前 Rust 库仅支持 requestTalkChannel），
- * 自动降级为纯文本 DM 战术方案。
+ * 语音密聊由 Rust 层路由：目标集下发后，采集管线原样调用 sendAudio，
+ * Rust 侧把语音包封装为 C2SWhisper 发给目标集（TS3 语义：密聊与频道发言互斥）。
+ * 文字私信仍作为补充通道发给同一目标集。
  *
  * 使用方法:
  *   // 先初始化（连接建立后调用）
@@ -27,15 +28,10 @@ import dev.tslib.User
  * 状态观察:
  *   WhisperManager.isWhisperActive — 是否有活跃密聊
  *   WhisperManager.whisperTargets — 当前密聊目标用户列表
- *   WhisperManager.isTextFallback — 是否正在使用文字 DM 兜底
  */
 object WhisperManager {
 
     private const val TAG = "WhisperManager"
-
-    /** Talk mode 常量: 0 = 普通频道讲话, 1 = 密聊 (Whisper) */
-    private const val TALK_MODE_NORMAL = 0
-    private const val TALK_MODE_WHISPER = 1
 
     /** 最大同时密聊目标数 */
     private const val MAX_WHISPER_TARGETS = 10
@@ -60,14 +56,6 @@ object WhisperManager {
     private val _whisperTargetNames = mutableListOf<String>()
     val whisperTargetNames: List<String> get() = _whisperTargetNames.toList()
 
-    /** 是否正在使用文字 DM 降级方案 */
-    @JvmStatic
-    var isTextFallback: Boolean by mutableStateOf(false)
-        private set
-
-    /** 上一次发送 DM 的时间戳（用于防抖） */
-    private var lastTextWhisperTime = 0L
-
     // ── 初始化 ──────────────────────────────────────────────
 
     /**
@@ -86,7 +74,6 @@ object WhisperManager {
         _whisperTargets.clear()
         _whisperTargetNames.clear()
         isWhisperActive = false
-        isTextFallback = false
         tsClient = null
         Log.d(TAG, "WhisperManager reset")
     }
@@ -100,8 +87,8 @@ object WhisperManager {
     /**
      * 向指定用户发起密聊。
      *
-     * 语音密聊（requestTalkChannel mode=1）尚未在 Rust 层接线，
-     * 密聊始终以文字私信（DM）方式工作。
+     * 目标集会同步下发到 Rust 层，之后采集管线的语音包由 Rust 封装为
+     * C2SWhisper 发往目标集（密聊与频道发言互斥）；文字私信仍可发同一目标集。
      *
      * @param targetKey 目标会话键（UID 或 "clid:<n>"）
      */
@@ -131,14 +118,11 @@ object WhisperManager {
 
         Log.i(TAG, "Starting whisper to ${targetUser?.nickname ?: targetKey}")
 
-        // 语音密聊需要 Rust 层提供 requestTalkChannel 通道，当前未接线，
-        // 密聊始终以文字私信（DM）方式工作
-        isTextFallback = true
-
-        // 更新状态
+        // 更新状态并下发语音路由
         _whisperTargets.add(targetKey)
         _whisperTargetNames.add(targetUser?.nickname ?: targetKey)
         isWhisperActive = true
+        applyVoiceTargets()
 
         Log.d(TAG, "Whisper target added: ${targetUser?.nickname ?: targetKey}")
     }
@@ -151,11 +135,11 @@ object WhisperManager {
 
         Log.i(TAG, "Stopping whisper, restoring normal channel talk")
 
-        // 重置状态
+        // 重置状态并恢复语音路由
         _whisperTargets.clear()
         _whisperTargetNames.clear()
         isWhisperActive = false
-        isTextFallback = false
+        applyVoiceTargets()
 
         Log.d(TAG, "Whisper mode ended")
     }
@@ -178,15 +162,12 @@ object WhisperManager {
     }
 
     /**
-     * 向当前密聊目标发送一条文字消息（DM 战术降级时使用）。
+     * 向当前密聊目标发送一条文字消息（与语音密聊并行的补充通道）。
      * 目标键在发送时解析为当前在线的客户端编号——对端重连后依然可达。
      */
     fun sendWhisperMessage(text: String) {
         val client = tsClient ?: return
         if (!isWhisperActive || _whisperTargets.isEmpty()) return
-
-        // 确保文字降级模式已激活
-        isTextFallback = true
 
         // 向所有密聊目标发送私信
         for (targetKey in _whisperTargets) {
@@ -232,7 +213,33 @@ object WhisperManager {
         }
         if (_whisperTargets.isEmpty()) {
             isWhisperActive = false
-            isTextFallback = false
         }
+        applyVoiceTargets()
+    }
+
+    /**
+     * 把当前密聊目标集解析为客户端编号并下发到 Rust 层的语音路由；
+     * 空目标集 = 关闭密聊恢复频道讲话；全部目标离线时路由到 clid 0
+     * （服务器虚拟客户端，密语包被服务器直接丢弃）——绝不能回落成
+     * 频道广播，否则 UI 显示密聊而实际全频道都听得到。
+     */
+    private fun applyVoiceTargets() {
+        val client = tsClient ?: return
+        if (_whisperTargets.isEmpty()) {
+            client.setWhisperTargets(IntArray(0), LongArray(0))
+            Log.d(TAG, "Voice whisper off, back to channel talk")
+            return
+        }
+        val clids = _whisperTargets.mapNotNull { key ->
+            client.users.value.find { keyOf(it) == key }?.id
+                ?: key.removePrefix("clid:").toIntOrNull()
+        }
+        if (clids.isEmpty()) {
+            Log.w(TAG, "All whisper targets offline; dropping voice (clid 0 sentinel) instead of channel broadcast")
+            client.setWhisperTargets(intArrayOf(0), LongArray(0))
+            return
+        }
+        client.setWhisperTargets(clids.toIntArray(), LongArray(0))
+        Log.d(TAG, "Voice whisper targets applied: $clids")
     }
 }

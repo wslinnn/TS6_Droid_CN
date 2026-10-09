@@ -60,6 +60,7 @@ fun UserItem(
     onToggleMute: (() -> Unit)? = null,
     onWhisperClick: ((Int) -> Unit)? = null,
     isLocallyMuted: Boolean = false,
+    isWhisperTalking: Boolean = false,
     isSelf: Boolean = false,
 ) {
     Box(modifier = modifier) {
@@ -77,6 +78,9 @@ fun UserItem(
                 avatar = avatar,
                 nickname = user.nickname,
                 isTalking = user.isTalking,
+                // Own row: server never echoes our talk status back, the ring
+                // runs on local VAD — refine it to amber while whisper mode is on
+                isWhisperTalking = isWhisperTalking || (isSelf && WhisperManager.isWhisperActive),
                 isRecording = user.isRecording,
                 isInputMuted = user.isInputMuted || !user.hasInputHardware,
                 isOutputMuted = user.isOutputMuted,
@@ -172,13 +176,16 @@ private fun AvatarWithRing(
     avatar: ImageBitmap?,
     nickname: String,
     isTalking: Boolean,
+    isWhisperTalking: Boolean = false,
     isRecording: Boolean,
     isInputMuted: Boolean = false,
     isOutputMuted: Boolean = false,
 ) {
     val ringActive = isTalking || isRecording
+    // Amber marks a whisper talker, matching the floating overlay ring
     val ringColor = when {
         isRecording -> Color(0xFFF44336)
+        isTalking && isWhisperTalking -> Color(0xFFFFB300)
         isTalking -> Color(0xFF2196F3)
         else -> Color.Transparent
     }

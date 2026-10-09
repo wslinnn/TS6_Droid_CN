@@ -91,6 +91,7 @@ import kotlinx.coroutines.launch
 fun ConnectionScreen(
     onConnected: () -> Unit,
     onNavigateToAbout: () -> Unit,
+    onNavigateToLogs: () -> Unit = {},
     // Share the activity-scoped instance that MainActivity keeps for its onStop
     // overlay check — a nav-scoped duplicate would collect every flow and decode
     // all bookmark icons a second time
@@ -340,6 +341,7 @@ fun ConnectionScreen(
                 ) {
                     SettingsPage(
                         onNavigateToAbout = onNavigateToAbout,
+                        onNavigateToLogs = onNavigateToLogs,
                         autoReconnect = autoReconnect,
                         onAutoReconnectChange = { viewModel.setAutoReconnect(it) },
                     )

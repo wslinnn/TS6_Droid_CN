@@ -1,6 +1,6 @@
 package dev.tsdroid.bridge
 
-import android.util.Log
+import dev.tsdroid.data.AppLog as Log
 import dev.tslib.Channel
 import dev.tslib.Client
 import dev.tslib.ConnectionState
@@ -150,7 +150,9 @@ class TsClient {
                         }
                         val c = Client(address, identity, candidateNickname, password, channel)
                         pendingClient = c
+                        val waitConnectedStart = System.currentTimeMillis()
                         c.waitConnected()
+                        Log.i(TAG, "waitConnected took ${System.currentTimeMillis() - waitConnectedStart}ms (attempt $attempt)")
                         pendingClientConnected = true
                         // Log immediately after waitConnected
                         val users = c.users
@@ -174,6 +176,17 @@ class TsClient {
                         client = c
                         pendingClient = null
                         serverAddress = address
+                        // A new native client starts with no audio sink —
+                        // attach the requested one right here (the only point
+                        // where the client is guaranteed to exist)
+                        pendingAudioSink?.let { sink ->
+                            try {
+                                c.setAudioSink(sink)
+                                Log.i(TAG, "Audio sink attached to new native client")
+                            } catch (e: Throwable) {
+                                Log.w(TAG, "Audio sink attach failed", e)
+                            }
+                        }
                         _state.value = ConnectionState.CONNECTED
                         refreshState()
                         if (client == null) {
@@ -269,7 +282,18 @@ class TsClient {
                     ensureActive()
                     try {
                         val c = client ?: break
-                        val events = c.processEvents() ?: emptyArray()
+                        // Blocking wait in native code: event arrival wakes
+                        // the call instantly (audio hot path), the timeout
+                        // only bounds silence. No polling sleep here.
+                        val pollMs = if (System.currentTimeMillis() - lastEventAt < 2000) 15 else 50
+                        val waitStart = System.currentTimeMillis()
+                        val events = c.waitEvents(pollMs) ?: emptyArray()
+                        val waited = System.currentTimeMillis() - waitStart
+                        // Diagnostics: the single native thread must never be
+                        // pinned for long — long blocks starve disconnect/send
+                        if (waited > 250) {
+                            Log.w(TAG, "waitEvents blocked ${waited}ms (timeout=$pollMs, ${events.size} events)")
+                        }
                         if (events.isNotEmpty()) lastEventAt = System.currentTimeMillis()
                         for (event in events) {
                             val emitted = if (event.type == "text_message") _chatEvents.tryEmit(event)
@@ -303,9 +327,14 @@ class TsClient {
                         closeAfterNativeFailure()
                         break
                     }
-                    // Poll fast right after activity; back off while idle so an
-                    // idle session doesn't burn CPU/battery at 50 wakeups/s
-                    delay(if (System.currentTimeMillis() - lastEventAt < 2000) 20 else 40)
+                    // No sleep: waitEvents already blocked in native code for
+                    // up to pollMs — arrival wakes it instantly, silence costs
+                    // one bounded native wait per tick instead of poll+delay.
+                    // yield() is still mandatory: it is this loop's only
+                    // suspension point, and without it the loop monopolizes
+                    // the single nativeDispatcher thread — disconnect (queued
+                    // behind it via runBlocking) would never run.
+                    kotlinx.coroutines.yield()
                 }
             } catch (e: CancellationException) {
                 Log.d(TAG, "Event loop coroutine clean cancelled.")
@@ -431,20 +460,23 @@ class TsClient {
     }
 
     private fun closeClient(c: Client, reason: String) {
+        val t0 = System.currentTimeMillis()
         var disconnectSent = false
         try {
             c.disconnect()
             disconnectSent = true
-            Log.d(TAG, "Native disconnect command sent ($reason)")
+            Log.d(TAG, "Native disconnect command sent ($reason) in ${System.currentTimeMillis() - t0}ms")
         } catch (e: Throwable) {
-            Log.w(TAG, "disconnect during $reason failed", e)
+            Log.w(TAG, "disconnect during $reason failed after ${System.currentTimeMillis() - t0}ms", e)
         }
 
         if (disconnectSent) {
             flushDisconnect(c, reason)
         }
 
+        val t1 = System.currentTimeMillis()
         destroyClient(c, reason)
+        Log.d(TAG, "closeClient($reason) total ${System.currentTimeMillis() - t0}ms (destroy ${System.currentTimeMillis() - t1}ms)")
     }
 
     private fun flushDisconnect(c: Client, reason: String) {
@@ -479,7 +511,7 @@ class TsClient {
             }
         }
 
-        Log.d(TAG, "Disconnect flush complete ($reason, observedDisconnected=$observedDisconnected)")
+        Log.d(TAG, "Disconnect flush complete ($reason, observedDisconnected=$observedDisconnected, took ${System.currentTimeMillis() - startedAt}ms)")
     }
 
     private fun destroyClient(c: Client, reason: String) {
@@ -502,6 +534,17 @@ class TsClient {
         }
     }
 
+    // Audio sink requested before a native client exists (or across
+    // reconnects): re-attached to every freshly created native client
+    private var pendingAudioSink: dev.tslib.AudioSink? = null
+
+    fun setAudioSink(sink: dev.tslib.AudioSink?) {
+        pendingAudioSink = sink
+        launchNativeCommand("setAudioSink") {
+            this.setAudioSink(sink)
+        }
+    }
+
     fun sendChannelMessage(msg: String) {
         launchNativeCommand("sendChannelMessage") {
             this.sendChannelMessage(msg)
@@ -517,6 +560,23 @@ class TsClient {
     fun sendPrivateMessage(userId: Int, msg: String) {
         launchNativeCommand("sendPrivateMessage") {
             this.sendPrivateMessage(userId, msg)
+        }
+    }
+
+    fun sendPoke(userId: Int, msg: String) {
+        launchNativeCommand("sendPoke") {
+            this.sendPoke(userId, msg)
+        }
+    }
+
+    /**
+     * Route outgoing voice to an explicit whisper target set (TS3 密聊)。
+     * Empty arrays restore normal channel talk. The capture pipeline keeps
+     * calling [sendAudio] unchanged — routing happens on the native side.
+     */
+    fun setWhisperTargets(clients: IntArray, channels: LongArray) {
+        launchNativeCommand("setWhisperTargets") {
+            this.setWhisperTargets(clients, channels)
         }
     }
 

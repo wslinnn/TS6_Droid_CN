@@ -13,7 +13,7 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
-import android.util.Log
+import dev.tsdroid.data.AppLog as Log
 import androidx.core.content.ContextCompat
 import dev.tslib.AudioConfig
 import dev.tslib.OpusCodec
@@ -94,6 +94,11 @@ class AudioBridge(
         SupervisorJob() + Dispatchers.IO.limitedParallelism(1)
     )
 
+    // Coalescing wake signal for the playback loop: capacity 1 — producers
+    // offer() after enqueueing a frame, the loop blocks on poll(20ms) when
+    // idle instead of sleeping a fixed tick (instant start, zero idle wakeups)
+    private val playbackWake = java.util.concurrent.ArrayBlockingQueue<Unit>(1)
+
     @Volatile
     var gainFactor: Float = 1.0f
 
@@ -164,9 +169,19 @@ class AudioBridge(
             encoder = OpusCodec(audioConfig)
             initAudioTrack()
             startPlaybackLoop()
+            // Push-mode receive: frames are invoked from the native pump the
+            // moment they arrive, skipping the event flow entirely
+            tsClient.setAudioSink(audioSink)
         } catch (e: Exception) {
             android.util.Log.e("TS6_DEBUG", "Caught audio initialization friction safely", e)
             // We don't throw here to prevent JE_AppCustomException
+        }
+    }
+
+    /** Native-side callback — queues the frame and wakes the playback loop. */
+    private val audioSink = object : dev.tslib.AudioSink {
+        override fun onAudioFrame(userId: Int, data: ByteArray, isWhisper: Boolean) {
+            playAudio(userId, data)
         }
     }
 
@@ -468,7 +483,7 @@ class AudioBridge(
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build()
             )
-            .setBufferSizeInBytes(maxOf(minBuf, FRAME_SIZE_BYTES * 4))
+            .setBufferSizeInBytes(maxOf(minBuf, FRAME_SIZE_BYTES * 2))
             .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             .build()
         audioTrack?.play()
@@ -533,10 +548,10 @@ class AudioBridge(
                     val bytes = shortsToBytes(mixBuffer)
                     audioTrack?.write(bytes, 0, bytes.size)
                 } else {
-                    // No audio data — idle wait. 20ms keeps the wake rate at
-                    // 50/s during silence (battery) while adding at most one
-                    // frame of latency when speech starts
-                    delay(20)
+                    // No audio data — block until a frame arrives (producer
+                    // offers the wake signal) or 20ms elapses. Instant speech
+                    // onset and zero wakeups during silence.
+                    playbackWake.poll(20, java.util.concurrent.TimeUnit.MILLISECONDS)
                 }
             }
         }
@@ -561,6 +576,7 @@ class AudioBridge(
             }
             // Drop oldest if queue is full (prevents unbounded lag)
         }
+        playbackWake.offer(Unit)
     }
 
     fun setMuted(muted: Boolean) {

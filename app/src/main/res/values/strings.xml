@@ -150,6 +150,7 @@
     <string name="whisper">Chuchoter</string>
     <string name="whisper_stop">Arrêter le chuchotement</string>
     <string name="whisper_placeholder">Chuchoter à %1$s…</string>
+    <string name="whisper_talk_toast">%1$s vous chuchote</string>
     <string name="overlay_offline">Hors ligne</string>
     <string name="overlay_minimize">Réduire</string>
     <string name="overlay_avatar">Avatar</string>
@@ -209,10 +210,18 @@
     <string name="poke_notification_title">%1$s vous a poké</string>
     <string name="poke_notification_no_message">(aucun message joint)</string>
     <string name="poke_received_with_message">%1$s vous a poké : %2$s</string>
+    <string name="poke_send">Poke</string>
+    <string name="poke_dialog_title">Poker %1$s</string>
+    <string name="poke_message_label">Message (optionnel)</string>
+    <string name="poke_sent">Poke envoyé</string>
     <string name="pm_target_offline">Correspondant hors ligne</string>
     <string name="crash_report_title">Fermeture anormale détectée</string>
     <string name="common_copy">Copier</string>
     <string name="common_copied">Copié</string>
+    <string name="back">Retour</string>
+    <string name="common_delete">Supprimer</string>
+    <string name="diag_log_title">Journaux</string>
+    <string name="diag_log_empty">Aucun journal pour l\'instant</string>
 
     <!-- Mot de passe du canal -->
     <string name="channel_password_title">Mot de passe requis pour « %1$s »</string>

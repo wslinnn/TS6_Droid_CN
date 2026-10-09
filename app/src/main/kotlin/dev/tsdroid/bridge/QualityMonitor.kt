@@ -1,6 +1,6 @@
 package dev.tsdroid.bridge
 
-import android.util.Log
+import dev.tsdroid.data.AppLog as Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay

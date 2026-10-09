@@ -11,7 +11,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.IBinder
 import android.provider.MediaStore
-import android.util.Log
+import dev.tsdroid.data.AppLog as Log
 import android.widget.Toast
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
@@ -160,6 +160,11 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     // Set of currently talking user IDs (tracked via talk_status events)
     private val _talkingUserIds = MutableStateFlow<Set<Int>>(emptySet())
     val talkingUserIds: StateFlow<Set<Int>> = _talkingUserIds.asStateFlow()
+
+    // Subset of talking users whose current talk burst is a whisper —
+    // drives the amber ring in the channel tree
+    private val _whisperTalkingUserIds = MutableStateFlow<Set<Int>>(emptySet())
+    val whisperTalkingUserIds: StateFlow<Set<Int>> = _whisperTalkingUserIds.asStateFlow()
     
     // Track local mic state for local user talking highlight
     private val _isLocalTalking = MutableStateFlow(false)
@@ -317,6 +322,10 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 val liveIds = users.map { it.id }.toSet()
                 val pruned = talking.intersect(liveIds)
                 if (pruned.size != talking.size) _talkingUserIds.value = pruned
+                val prunedWhisper = _whisperTalkingUserIds.value.intersect(liveIds)
+                if (prunedWhisper.size != _whisperTalkingUserIds.value.size) {
+                    _whisperTalkingUserIds.value = prunedWhisper
+                }
 
                 val myId = tsClient?.clientId
 
@@ -385,7 +394,24 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             audioBridge?.setMicMode(micMode.value)
             audioBridge?.setVadThresholdDb(vadThresholdDb.value)
             viewModelScope.launch {
-                settingsStore.micMode.collect { audioBridge?.setMicMode(it) }
+                // Distinct + transition-aware: the StateFlow's placeholder
+                // value and DataStore re-emissions must not be mistaken for
+                // real mode switches
+                var lastMode: MicMode? = null
+                settingsStore.micMode.collect { mode ->
+                    if (mode == lastMode) return@collect
+                    val previous = lastMode
+                    lastMode = mode
+                    audioBridge?.setMicMode(mode)
+                    // PTT borrows the mute flag as its transmit gate (hold =
+                    // temporary unmute, release = restore). Entering PTT with
+                    // the flag left false — e.g. after unmuting in VAD/Open —
+                    // leaves the mic hot with no mute affordance in the main
+                    // UI, so restore PTT's steady state on a real switch.
+                    if (mode == MicMode.PTT && previous != null && previous != MicMode.PTT) {
+                        audioBridge?.setMuted(true)
+                    }
+                }
             }
             viewModelScope.launch {
                 settingsStore.vadThresholdDb.collect { audioBridge?.setVadThresholdDb(it) }
@@ -564,10 +590,15 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 "talk_status_start" -> {
                     val userId = (event.data["user_id"] as? Number)?.toInt() ?: return
                     _talkingUserIds.value = _talkingUserIds.value + userId
+                    val isWhisper = event.data["is_whisper"] as? Boolean ?: false
+                    _whisperTalkingUserIds.value =
+                        if (isWhisper) _whisperTalkingUserIds.value + userId
+                        else _whisperTalkingUserIds.value - userId
                 }
                 "talk_status_stop" -> {
                     val userId = (event.data["user_id"] as? Number)?.toInt() ?: return
                     _talkingUserIds.value = _talkingUserIds.value - userId
+                    _whisperTalkingUserIds.value = _whisperTalkingUserIds.value - userId
                 }
                 "text_message" -> {
                     try {
@@ -810,6 +841,20 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         _privateMessages.value = current
         pendingOwnEchoes.addLast(PendingEcho("private", convKey, text, System.currentTimeMillis()))
         scheduleSave()
+    }
+
+    /**
+     * Poke a user by their current client id, with an optional message.
+     * The "sent" toast is optimistic — a server-side rejection (e.g.
+     * insufficient poke power) surfaces via the shared command-error toast.
+     */
+    fun sendPoke(clid: Int, message: String) {
+        tsClient?.sendPoke(clid, message) ?: return
+        viewModelScope.launch {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                Toast.makeText(getApplication(), getApplication<Application>().getString(R.string.poke_sent), Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     /** Conversation key for a client id: uid when known, else "clid:<n>". */

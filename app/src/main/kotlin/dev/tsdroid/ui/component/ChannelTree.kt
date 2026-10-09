@@ -47,6 +47,7 @@ fun ChannelTree(
     onUserLongClick: ((User) -> Unit)? = null,
     onUserLongPress: ((User) -> Unit)? = null,
     mutedUserIds: Set<Int> = emptySet(),
+    whisperTalkingUserIds: Set<Int> = emptySet(),
     channelIcons: Map<Long, ImageBitmap> = emptyMap(),
     userAvatars: Map<String, ImageBitmap> = emptyMap(),
     onWhisperClick: ((Int) -> Unit)? = null,
@@ -88,6 +89,7 @@ fun ChannelTree(
                     onLongClick = onUserLongPress?.let { { it(item.user) } },
                     onToggleMute = onUserLongClick?.let { { it(item.user) } },
                     isLocallyMuted = item.user.id in mutedUserIds,
+                    isWhisperTalking = item.user.id in whisperTalkingUserIds,
                     onWhisperClick = onWhisperClick,
                     isSelf = item.user.id == selfId,
                 )

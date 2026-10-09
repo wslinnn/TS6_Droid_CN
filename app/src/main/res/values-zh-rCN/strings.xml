@@ -149,6 +149,7 @@
     <string name="whisper">密聊</string>
     <string name="whisper_stop">停止密聊</string>
     <string name="whisper_placeholder">文字密聊 %1$s…</string>
+    <string name="whisper_talk_toast">%1$s 正在密语</string>
     <string name="overlay_offline">未连接</string>
     <string name="overlay_minimize">收起</string>
     <string name="overlay_avatar">头像</string>
@@ -208,10 +209,18 @@
     <string name="poke_notification_title">%1$s 戳了戳你</string>
     <string name="poke_notification_no_message">（无附带消息）</string>
     <string name="poke_received_with_message">%1$s 戳了戳你：%2$s</string>
+    <string name="poke_send">戳一戳</string>
+    <string name="poke_dialog_title">戳一戳 %1$s</string>
+    <string name="poke_message_label">留言（可选）</string>
+    <string name="poke_sent">戳一戳已发送</string>
     <string name="pm_target_offline">对方当前不在线，无法发送</string>
     <string name="crash_report_title">检测到上次异常退出</string>
     <string name="common_copy">复制</string>
     <string name="common_copied">已复制</string>
+    <string name="back">返回</string>
+    <string name="common_delete">删除</string>
+    <string name="diag_log_title">日志</string>
+    <string name="diag_log_empty">暂无日志</string>
 
     <!-- 频道密码 -->
     <string name="channel_password_title">加入「%1$s」需要密码</string>

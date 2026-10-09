@@ -11,7 +11,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
-import android.util.Log
+import dev.tsdroid.data.AppLog as Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -104,6 +104,9 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         /** Reconnect at most once per burst of network-change callbacks. */
         private const val NETWORK_RECONNECT_DEBOUNCE_MS = 5_000L
 
+        /** One "user is whispering" toast per burst of whisper talk. */
+        private const val WHISPER_NOTIFY_DEBOUNCE_MS = 15_000L
+
         var instance: TsConnectionService? = null
             private set
     }
@@ -128,8 +131,12 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
     private var overlayConnected by mutableStateOf(false)
     private var overlayChannelName by mutableStateOf<String?>(null)
     private var overlayActiveSpeakerId by mutableStateOf<Int?>(null)
+    private var overlayActiveSpeakerIsWhisper by mutableStateOf(false)
     private var overlayActiveSpeakerName by mutableStateOf<String?>(null)
     private var overlayActiveSpeakerAvatar by mutableStateOf<ImageBitmap?>(null)
+
+    // Debounce for "user is whispering" toasts (one per whisper burst)
+    private var lastWhisperNotifyAt = 0L
     
     // Delay mechanism for overlay speaker state changes
     private var pendingSpeakerId: Int? = null
@@ -210,19 +217,10 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         // Load saved floating window position
         loadSavedPosition()
 
-        // Listen for audio events, talk status, and play per-user mixing
+        // Listen for talk status and poke events; received audio bypasses
+        // the event flow entirely (AudioBridge registers a native audio sink)
         tsClient.events.onEach { event ->
             when (event.type) {
-                "audio_received" -> {
-                    val userId = (event.data["user_id"] as? Number)?.toInt() ?: return@onEach
-                    val data = event.data["data"]
-                    if (data is ByteArray) {
-                        audioBridge.playAudio(userId, data)
-                    } else if (data is Array<*>) {
-                        val bytes = ByteArray(data.size) { (data[it] as? Number)?.toByte() ?: 0 }
-                        audioBridge.playAudio(userId, bytes)
-                    }
-                }
                 "poked" -> {
                     val pokerName = event.data["poker_name"] as? String ?: return@onEach
                     val message = event.data["message"] as? String ?: ""
@@ -230,17 +228,21 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                 }
                 "talk_status_start" -> {
                     val speakerId = (event.data["user_id"] as? Number)?.toInt()
+                    val isWhisper = event.data["is_whisper"] as? Boolean ?: false
                     if (speakerId != null) {
                         // Cancel any pending speaker stop
                         speakerUpdateJob?.cancel()
                         pendingSpeakerId = speakerId
-                        
+
+                        if (isWhisper) maybeNotifyWhisperTalk(speakerId)
+
                         // Delay speaker update to avoid flickering
                         speakerUpdateJob = serviceScope.launch {
                             delay(SPEAKER_DELAY_MS)
                             // Only update if still the pending speaker
                             if (pendingSpeakerId == speakerId) {
                                 overlayActiveSpeakerId = speakerId
+                                overlayActiveSpeakerIsWhisper = isWhisper
                                 overlayActiveSpeakerName = findUserNickname(speakerId)
                                 // Cached avatar only — ServerViewModel loads avatars
                                 // as the user list refreshes; re-downloading on
@@ -264,6 +266,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                             // Only update if still no pending speaker
                             if (pendingSpeakerId == null) {
                                 overlayActiveSpeakerId = null
+                                overlayActiveSpeakerIsWhisper = false
                                 overlayActiveSpeakerName = null
                                 overlayActiveSpeakerAvatar = null
                             }
@@ -444,6 +447,27 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
             getSystemService(NotificationManager::class.java).notify(id, notification)
         } catch (e: Exception) {
             Log.w(TAG, "Poke notification failed", e)
+        }
+    }
+
+    /**
+     * Toast when someone starts whispering to us. Debounced to one toast per
+     * burst so an ongoing whisper conversation doesn't spam; the overlay ring
+     * carries the continuous visual state.
+     */
+    private fun maybeNotifyWhisperTalk(speakerId: Int) {
+        val now = System.currentTimeMillis()
+        if (now - lastWhisperNotifyAt < WHISPER_NOTIFY_DEBOUNCE_MS) return
+        lastWhisperNotifyAt = now
+        val name = findUserNickname(speakerId) ?: return
+        try {
+            android.widget.Toast.makeText(
+                applicationContext,
+                getString(R.string.whisper_talk_toast, name),
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+        } catch (e: Exception) {
+            Log.w(TAG, "Whisper toast failed", e)
         }
     }
 
@@ -700,6 +724,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                     channelName = overlayChannelName,
                     activeSpeakerName = overlayActiveSpeakerName,
                     activeSpeakerAvatar = overlayActiveSpeakerAvatar,
+                    activeSpeakerIsWhisper = overlayActiveSpeakerIsWhisper,
                     isLocalVoiceActive = delayedLocalSpeaking,
                     isExpanded = isOverlayExpanded,
                     onToggleExpand = { 
@@ -859,6 +884,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         channelName: String?,
         activeSpeakerName: String?,
         activeSpeakerAvatar: ImageBitmap?,
+        activeSpeakerIsWhisper: Boolean,
         isLocalVoiceActive: Boolean,
         isExpanded: Boolean,
         onToggleExpand: () -> Unit,
@@ -921,7 +947,15 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                     } else null
                 }
                 
-                val borderColor = if (isSpeaking) Color(0xFF2196F3) else Color(0x4DFFFFFF)
+                // Amber ring marks a whisper speaker (distinct from channel-talk blue);
+                // own speech never arrives as talk status, so gate it on whisper mode
+                val isLocalUserWhispering = isLocalUserSpeaking && WhisperManager.isWhisperActive
+                val borderColor = when {
+                    isLocalUserWhispering -> Color(0xFFFFB300)
+                    isRemoteUserSpeaking && activeSpeakerIsWhisper -> Color(0xFFFFB300)
+                    isSpeaking -> Color(0xFF2196F3)
+                    else -> Color(0x4DFFFFFF)
+                }
                 val borderWidth = if (isSpeaking) 2.dp else 1.dp
                 
                 Surface(

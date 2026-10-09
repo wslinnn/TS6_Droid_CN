@@ -150,6 +150,7 @@ fun ServerScreen(
     val animeBackground by viewModel.animeBackground.collectAsStateWithLifecycle()
     val noiseSuppression by viewModel.noiseSuppression.collectAsStateWithLifecycle()
     val mutedUserIds by viewModel.mutedUserIds.collectAsStateWithLifecycle()
+    val whisperTalkingUserIds by viewModel.whisperTalkingUserIds.collectAsStateWithLifecycle()
     val fileManagerOpen by viewModel.fileManagerOpen.collectAsStateWithLifecycle()
     val fileList by viewModel.fileList.collectAsStateWithLifecycle()
     val previewImageBitmap by viewModel.previewImageBitmap.collectAsStateWithLifecycle()
@@ -280,6 +281,7 @@ fun ServerScreen(
 
     // Per-user panel (volume / mute / info) — opened by long-pressing a row
     var userPanelUserId by remember { mutableStateOf<Int?>(null) }
+    var pokeTargetUserId by remember { mutableStateOf<Int?>(null) }
     var showServerInfo by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -512,6 +514,7 @@ fun ServerScreen(
                     if (userId != viewModel.myClientId) viewModel.toggleWhisper(userId)
                 },
                 mutedUserIds = mutedUserIds,
+                whisperTalkingUserIds = whisperTalkingUserIds,
                 channelIcons = channelIcons,
                 userAvatars = userAvatars,
                 selfId = viewModel.myClientId,
@@ -658,8 +661,45 @@ fun ServerScreen(
             }
             userPanelUserId = null
         },
+        onPoke = {
+            userPanelUserId?.let { pokeTargetUserId = it }
+            userPanelUserId = null
+        },
         onDismiss = { userPanelUserId = null },
     )
+
+    // Poke prompt — optional message, sent to the user's current client id
+    pokeTargetUserId?.let { targetId ->
+        val targetName = users.find { it.id == targetId }?.nickname ?: ""
+        var pokeMessage by remember(targetId) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { pokeTargetUserId = null },
+            title = { Text(stringResource(R.string.poke_dialog_title, targetName)) },
+            text = {
+                OutlinedTextField(
+                    value = pokeMessage,
+                    onValueChange = { pokeMessage = it },
+                    label = { Text(stringResource(R.string.poke_message_label)) },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.sendPoke(targetId, pokeMessage.trim())
+                        pokeTargetUserId = null
+                    },
+                ) {
+                    Text(stringResource(R.string.confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pokeTargetUserId = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
 
     // Channel password prompt — required before the server accepts the move
     passwordChannelId?.let { channelId ->

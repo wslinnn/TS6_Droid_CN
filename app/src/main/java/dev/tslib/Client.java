@@ -70,6 +70,33 @@ public class Client implements AutoCloseable {
     }
 
     /**
+     * Block until events arrive or {@code timeoutMs} elapses. The first
+     * arriving event wakes this call instantly — no polling interval —
+     * so this is both lower-latency and more power-efficient than sleeping
+     * between {@link #processEvents()} calls.
+     *
+     * @param timeoutMs idle bound in milliseconds (≥ 1)
+     * @throws TsLibException on error
+     */
+    public Event[] waitEvents(int timeoutMs) {
+        checkNotClosed();
+        return nativeWaitEvents(nativePtr, timeoutMs);
+    }
+
+    /**
+     * Register a low-latency audio callback. Once set, received voice frames
+     * are delivered synchronously on a native pump thread instead of via
+     * {@code AudioReceived} events. Pass {@code null} to unregister.
+     *
+     * @param sink receiver or null
+     * @throws TsLibException on error
+     */
+    public void setAudioSink(AudioSink sink) {
+        checkNotClosed();
+        nativeSetAudioSink(nativePtr, sink);
+    }
+
+    /**
      * Disconnect from the server.
      *
      * @throws TsLibException on error
@@ -201,6 +228,32 @@ public class Client implements AutoCloseable {
     public void sendPrivateMessage(int userId, String msg) {
         checkNotClosed();
         nativeSendPrivateMessage(nativePtr, userId, msg);
+    }
+
+    /**
+     * Send a poke to a user.
+     *
+     * @param userId target user ID
+     * @param msg    poke message (may be empty)
+     * @throws TsLibException on error
+     */
+    public void sendPoke(int userId, String msg) {
+        checkNotClosed();
+        nativeSendPoke(nativePtr, userId, msg);
+    }
+
+    /**
+     * Set the whisper target set for outgoing voice. While non-empty, all
+     * audio captured via {@link #sendAudio(byte[], int)} is sent as whisper
+     * packets to these clients/channels instead of the current channel.
+     *
+     * @param clients  target client ids (empty to clear)
+     * @param channels target channel ids (empty to clear)
+     * @throws TsLibException on error
+     */
+    public void setWhisperTargets(int[] clients, long[] channels) {
+        checkNotClosed();
+        nativeSetWhisperTargets(nativePtr, clients, channels);
     }
 
     /**
@@ -375,6 +428,8 @@ public class Client implements AutoCloseable {
     private static native void nativeDestroy(long ptr);
     private static native void nativeWaitConnected(long ptr);
     private static native Event[] nativeProcessEvents(long ptr);
+    private static native Event[] nativeWaitEvents(long ptr, int timeoutMs);
+    private static native void nativeSetAudioSink(long ptr, AudioSink sink);
     private static native void nativeDisconnect(long ptr);
     private static native boolean nativeIsConnected(long ptr);
     private static native int nativeGetState(long ptr);
@@ -388,6 +443,8 @@ public class Client implements AutoCloseable {
     private static native void nativeSendServerMessage(long ptr, String msg);
     private static native void nativeSendChannelMessage(long ptr, String msg);
     private static native void nativeSendPrivateMessage(long ptr, int userId, String msg);
+    private static native void nativeSendPoke(long ptr, int userId, String msg);
+    private static native void nativeSetWhisperTargets(long ptr, int[] clients, long[] channels);
     private static native void nativeMoveToChannel(long ptr, long channelId, String password);
     private static native double[] nativeGetNetworkStats(long ptr);
     private static native void nativeSyncState(long ptr);

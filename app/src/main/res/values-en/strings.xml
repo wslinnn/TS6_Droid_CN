@@ -150,6 +150,7 @@
     <string name="whisper">Whisper</string>
     <string name="whisper_stop">Stop whisper</string>
     <string name="whisper_placeholder">Whisper to %1$s…</string>
+    <string name="whisper_talk_toast">%1$s is whispering to you</string>
     <string name="overlay_offline">Offline</string>
     <string name="overlay_minimize">Minimize</string>
     <string name="overlay_avatar">Avatar</string>
@@ -209,10 +210,18 @@
     <string name="poke_notification_title">%1$s poked you</string>
     <string name="poke_notification_no_message">(no message attached)</string>
     <string name="poke_received_with_message">%1$s poked you: %2$s</string>
+    <string name="poke_send">Poke</string>
+    <string name="poke_dialog_title">Poke %1$s</string>
+    <string name="poke_message_label">Message (optional)</string>
+    <string name="poke_sent">Poke sent</string>
     <string name="pm_target_offline">Peer is currently offline</string>
     <string name="crash_report_title">Previous abnormal exit detected</string>
     <string name="common_copy">Copy</string>
     <string name="common_copied">Copied</string>
+    <string name="back">Back</string>
+    <string name="common_delete">Delete</string>
+    <string name="diag_log_title">Logs</string>
+    <string name="diag_log_empty">No logs yet</string>
 
     <!-- Channel password -->
     <string name="channel_password_title">Password required for “%1$s”</string>

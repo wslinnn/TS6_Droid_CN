@@ -55,6 +55,7 @@ import kotlin.math.roundToInt
 @Composable
 fun SettingsPage(
     onNavigateToAbout: () -> Unit,
+    onNavigateToLogs: () -> Unit = {},
     autoReconnect: Boolean,
     onAutoReconnectChange: (Boolean) -> Unit,
 ) {
@@ -260,6 +261,16 @@ fun SettingsPage(
 
                 // 检查更新
                 UpdateCheckRow(context)
+
+                // 日志（仅 debug 包）——应用内查看诊断日志，免 adb
+                val isDebuggable = (context.applicationInfo.flags and
+                    android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                if (isDebuggable) {
+                    SettingsClickableRow(
+                        label = stringResource(R.string.diag_log_title),
+                        onClick = onNavigateToLogs,
+                    )
+                }
             }
         }
 

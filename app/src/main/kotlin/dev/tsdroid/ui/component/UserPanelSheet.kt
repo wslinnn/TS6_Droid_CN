@@ -50,6 +50,7 @@ fun UserPanelSheet(
     onVolumeCommit: (Float) -> Unit,
     onToggleMute: () -> Unit,
     onPrivateMessage: () -> Unit,
+    onPoke: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     if (user == null) return
@@ -102,6 +103,9 @@ fun UserPanelSheet(
 
             TextButton(onClick = onPrivateMessage) {
                 Text(stringResource(R.string.private_message))
+            }
+            TextButton(onClick = onPoke) {
+                Text(stringResource(R.string.poke_send))
             }
         }
     }
