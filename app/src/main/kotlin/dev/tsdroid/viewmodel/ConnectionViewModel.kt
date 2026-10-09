@@ -67,6 +67,10 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     val password = MutableStateFlow("")
     val channel = MutableStateFlow("")
 
+    /** Global nickname default — seeded from settings (imported identity). */
+    val defaultNickname: StateFlow<String> = settingsStore.defaultNickname
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
     /** Index du favori en cours d'édition, ou -1 si ajout. */
     private val _editingIndex = MutableStateFlow(-1)
     val editingIndex: StateFlow<Int> = _editingIndex.asStateFlow()

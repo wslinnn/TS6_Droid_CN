@@ -101,6 +101,15 @@ fun ConnectionScreen(
 ) {
     val address by viewModel.address.collectAsStateWithLifecycle()
     val nickname by viewModel.nickname.collectAsStateWithLifecycle()
+    val defaultNickname by viewModel.defaultNickname.collectAsStateWithLifecycle()
+    // Seed the empty connection field with the global default (e.g. the
+    // nickname of an imported identity) — never overwrite typed text or a
+    // bookmark's own nickname
+    LaunchedEffect(defaultNickname) {
+        if (defaultNickname.isNotBlank() && viewModel.nickname.value.isEmpty()) {
+            viewModel.nickname.value = defaultNickname
+        }
+    }
     val password by viewModel.password.collectAsStateWithLifecycle()
     val channel by viewModel.channel.collectAsStateWithLifecycle()
     val bookmarks by viewModel.bookmarks.collectAsStateWithLifecycle()

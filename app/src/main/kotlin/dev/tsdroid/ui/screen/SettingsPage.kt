@@ -115,7 +115,7 @@ fun SettingsPage(
                 val ok = withContext(Dispatchers.IO) {
                     try {
                         context.contentResolver.openOutputStream(uri)?.use { out ->
-                            identityStore.exportTo(out)
+                            identityStore.exportTsIniTo(out)
                         } ?: false
                     } catch (_: Exception) {
                         false
@@ -145,6 +145,12 @@ fun SettingsPage(
                 }
                 if (ok) {
                     identityUid = withContext(Dispatchers.IO) { identityStore.readUniqueId() }
+                    // The imported identity's nickname becomes the connection
+                    // default — moving an identity brings its name along
+                    val importedNickname = withContext(Dispatchers.IO) { identityStore.readNickname() }
+                    if (!importedNickname.isNullOrBlank()) {
+                        settingsStore.setDefaultNickname(importedNickname)
+                    }
                     Toast.makeText(context, R.string.identity_import_success, Toast.LENGTH_LONG).show()
                 } else {
                     Toast.makeText(context, R.string.identity_import_failed, Toast.LENGTH_LONG).show()
@@ -186,7 +192,7 @@ fun SettingsPage(
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedButton(
-                            onClick = { exportIdentityLauncher.launch("ts6mobile_identity.ini") },
+                            onClick = { exportIdentityLauncher.launch("identity_ts3.ini") },
                             enabled = identityUid != null,
                         ) {
                             Text(stringResource(R.string.identity_export))

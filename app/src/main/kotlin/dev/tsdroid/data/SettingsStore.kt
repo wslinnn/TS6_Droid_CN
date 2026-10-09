@@ -24,8 +24,17 @@ private val KEY_NOISE_SUPPRESSION = booleanPreferencesKey("noise_suppression")
 private val KEY_PTT_MODE = booleanPreferencesKey("ptt_mode")
 private val KEY_MIC_MODE = stringPreferencesKey("mic_mode")
 private val KEY_VAD_THRESHOLD_DB = floatPreferencesKey("vad_threshold_db")
+private val KEY_DEFAULT_NICKNAME = stringPreferencesKey("default_nickname")
 
 class SettingsStore(private val context: Context) {
+
+    /** Seeds the connection nickname field (e.g. from an imported identity). */
+    val defaultNickname: Flow<String> = context.settingsDataStore.data
+        .map { it[KEY_DEFAULT_NICKNAME] ?: "" }
+
+    suspend fun setDefaultNickname(nickname: String) {
+        context.settingsDataStore.edit { it[KEY_DEFAULT_NICKNAME] = nickname }
+    }
 
     val audioGain: Flow<Float> = context.settingsDataStore.data
         .map { it[KEY_AUDIO_GAIN] ?: 1.0f }

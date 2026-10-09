@@ -17,6 +17,23 @@ class IdentityFileStore(private val context: Context) {
 
     fun exists(): Boolean = file.exists()
 
+    /** @return the nickname stored with the identity, or null if none */
+    fun readNickname(): String? {
+        if (!file.exists()) return null
+        val identity = try {
+            Identity.load(file.absolutePath)
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            identity.nickname?.takeIf { it.isNotBlank() }
+        } catch (_: Throwable) {
+            null
+        } finally {
+            identity.close()
+        }
+    }
+
     /** @return the UID of the stored identity, or null if none exists/it is invalid */
     fun readUniqueId(): String? {
         if (!file.exists()) return null
@@ -39,6 +56,28 @@ class IdentityFileStore(private val context: Context) {
         if (!file.exists()) return false
         file.inputStream().use { input -> input.copyTo(out) }
         return true
+    }
+
+    /**
+     * Export as an official TeamSpeak client identity file (ts.ini),
+     * importable by desktop clients. @return false when no identity exists
+     */
+    fun exportTsIniTo(out: OutputStream, label: String = "Default"): Boolean {
+        if (!file.exists()) return false
+        val identity = try {
+            Identity.load(file.absolutePath)
+        } catch (_: Throwable) {
+            return false
+        }
+        return try {
+            val ini = identity.exportTeamSpeakIni(label)
+            out.write(ini.toByteArray(Charsets.UTF_8))
+            true
+        } catch (_: Throwable) {
+            false
+        } finally {
+            identity.close()
+        }
     }
 
     /**
