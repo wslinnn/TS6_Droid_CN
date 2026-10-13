@@ -28,14 +28,17 @@ data class QualitySnapshot(
 
 /**
  * Samples the native connection stats every few seconds, keeps a recent
- * window, and feeds observed loss into the audio bridge so the Opus encoder
- * adapts (FEC redundancy / bitrate) to the network instead of failing on it.
+ * window, and publishes it as [snapshot] for the server info panel. The
+ * loss number also feeds the link-death detector: a healthy connection
+ * always receives keepalives, so a zero-rx streak means the network died
+ * even though the state still says connected.
  *
  * The native loss number is cumulative since connect — slow to move and
  * eventually insensitive on long sessions. The monitor differences the
  * cumulative lost/observed counts into a recent-window loss (last ~5s),
- * which matches the desktop client's live-reading behaviour; the same
- * windowed value drives the FEC adaptation.
+ * which matches the desktop client's live-reading behaviour. This value is
+ * display/diagnostic only: the encoder is configured statically per channel
+ * quality, there is deliberately no runtime adaptation loop.
  *
  * Outage handling: a healthy connection always receives keepalive packets
  * every second, so a streak of zero-rx samples means the network is dead
@@ -46,7 +49,6 @@ data class QualitySnapshot(
  */
 class QualityMonitor(
     private val tsClient: TsClient,
-    private val audioBridge: AudioBridge?,
     /** Invoked once when the link is declared dead, so the service can force a reconnect. */
     private val onLinkDead: (() -> Unit)? = null,
 ) {
@@ -209,7 +211,6 @@ class QualityMonitor(
             bytesReceivedPerSec = rxBytes,
             bytesSentPerSec = stats[5].toLong(),
         )
-        audioBridge?.applyNetworkQuality(windowLoss)
     }
 
     private fun percentile(sorted: List<Double>, p: Double): Double {

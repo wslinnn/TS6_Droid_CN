@@ -202,7 +202,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         avatarCache = AvatarCache(applicationContext.cacheDir)
         audioBridge = AudioBridge(applicationContext, tsClient)
         audioBridge.initialize()
-        qualityMonitor = QualityMonitor(tsClient, audioBridge) {
+        qualityMonitor = QualityMonitor(tsClient) {
             serviceScope.launch { forceImmediateReconnect() }
         }
         try {

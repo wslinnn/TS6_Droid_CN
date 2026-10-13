@@ -47,12 +47,6 @@ class AudioBridge(
 
         /** Output volume multiplier while another app holds transient focus (can-duck). */
         private const val DUCK_FACTOR = 0.3f
-
-        /** Never adapt the voice bitrate below this — speech intelligibility floor. */
-        private const val MIN_ADAPTIVE_BITRATE = 16_000
-
-        /** Encoder FEC stays disabled below this observed loss fraction. */
-        private const val FEC_ENABLE_LOSS = 0.02f
     }
 
     private val audioConfig = AudioConfig()
@@ -433,33 +427,6 @@ class AudioBridge(
             for ((_, queue) in userQueues) {
                 queue.clear()
             }
-        }
-    }
-
-    /**
-     * Adapt the Opus encoder to observed network quality. The quality
-     * monitor calls this with the recent packet-loss fraction; the encoder
-     * scales FEC redundancy and sheds bitrate rather than flooding a weak
-     * link with large frames.
-     */
-    fun applyNetworkQuality(packetLoss: Float) {
-        val codec = encoder ?: return
-        val lossPercent = (packetLoss * 100).toInt().coerceIn(0, 100)
-        val fecEnabled = packetLoss >= FEC_ENABLE_LOSS
-        val baseBitrate = audioConfig.bitrate.takeIf { it > 0 } ?: 32_000
-        val target = when {
-            packetLoss >= 0.15f -> baseBitrate / 2
-            packetLoss >= 0.05f -> baseBitrate * 3 / 4
-            else -> baseBitrate
-        }.coerceAtLeast(MIN_ADAPTIVE_BITRATE)
-        try {
-            codec.setFec(fecEnabled)
-            // Headroom above the observed loss so FEC covers bursts
-            codec.setExpectedPacketLoss((lossPercent + 5).coerceAtMost(40))
-            codec.setBitrate(target)
-            Log.d(TAG, "Adaptive audio: loss=${"%.1f".format(packetLoss * 100)}% fec=$fecEnabled bitrate=$target")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to adapt encoder to network quality", e)
         }
     }
 
