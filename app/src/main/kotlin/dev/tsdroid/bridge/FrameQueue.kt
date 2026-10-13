@@ -17,7 +17,7 @@ import java.util.ArrayDeque
 class FrameQueue(private val capacity: Int) {
 
     /** A queued frame plus the loss state of the frames immediately before it. */
-    class Entry(val frame: ByteArray, val gap: Int)
+    class Entry(val frame: ByteArray, val gap: Int, val enqueuedAt: Long)
 
     private val queue = ArrayDeque<Entry>()
 
@@ -44,12 +44,18 @@ class FrameQueue(private val capacity: Int) {
             }
             lastSeq = seq
             if (queue.size >= capacity) queue.removeFirst()
-            queue.addLast(Entry(frame, gap))
+            queue.addLast(Entry(frame, gap, System.currentTimeMillis()))
         }
     }
 
     /** Dequeue the oldest entry, or null when empty. */
     fun pollFirst(): Entry? = synchronized(this) { queue.pollFirst() }
+
+    /** Age of the oldest queued frame, or [Long.MAX_VALUE] when empty. */
+    fun oldestAgeMs(now: Long): Long = synchronized(this) {
+        val first = queue.firstOrNull() ?: return Long.MAX_VALUE
+        now - first.enqueuedAt
+    }
 
     fun clear() = synchronized(this) {
         queue.clear()

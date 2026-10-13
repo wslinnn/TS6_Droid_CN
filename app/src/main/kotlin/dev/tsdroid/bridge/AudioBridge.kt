@@ -44,7 +44,21 @@ class AudioBridge(
         private const val FRAME_SIZE_MS = 20
         private const val FRAME_SIZE_SAMPLES = SAMPLE_RATE * FRAME_SIZE_MS / 1000 // 960
         private const val FRAME_SIZE_BYTES = FRAME_SIZE_SAMPLES * 2 // 16-bit PCM = 2 bytes/sample
-        private const val MAX_QUEUE_FRAMES = 10 // Max buffered frames per user
+        // Backstop cap — the write-side watermark bounds latency first; this
+        // only kicks in for arrival bursts (e.g. VAD pre-roll dumps)
+        private const val MAX_QUEUE_FRAMES = 6
+
+        /** AudioTrack buffer capacity: burst headroom, NOT a latency target. */
+        private const val TRACK_BUFFER_FRAMES = 8 // 160ms capacity
+
+        /** Write-side watermark: stop draining while the track holds this much. */
+        private const val TARGET_TRACK_BUFFER_MS = 60L
+
+        /** Start draining a fresh talkspurt at this much queued depth… */
+        private const val PRIME_MIN_FRAMES = 2
+
+        /** …or once its oldest frame has waited this long, whichever first. */
+        private const val PRIME_MAX_WAIT_MS = 60L
 
         /** PLC frames injected while a talkspurt tail starves, before silence. */
         private const val MAX_HUNGER_PLC_FRAMES = 3
@@ -514,7 +528,7 @@ class AudioBridge(
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build()
             )
-            .setBufferSizeInBytes(maxOf(minBuf, FRAME_SIZE_BYTES * 2))
+            .setBufferSizeInBytes(maxOf(minBuf, FRAME_SIZE_BYTES * TRACK_BUFFER_FRAMES))
             .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             .build()
         audioTrack?.play()
@@ -536,6 +550,9 @@ class AudioBridge(
         playbackJob = playbackScope.launch {
             val mixBuffer = ShortArray(FRAME_SIZE_SAMPLES)
             val decodeBuffer = ShortArray(FRAME_SIZE_SAMPLES)
+            // Total PCM frames handed to AudioTrack — compared against
+            // playbackHeadPosition to measure the track's buffered depth
+            var writtenFrames = 0L
 
             // Sum one decoded frame into the mix buffer with per-user gain
             fun mixIn(userId: Int, pcm: ByteArray): Boolean {
@@ -571,6 +588,41 @@ class AudioBridge(
                 var hasData = false
                 mixBuffer.fill(0)
                 val now = System.currentTimeMillis()
+
+                if (now - lastDiagFlush >= DIAG_FLUSH_MS) {
+                    lastDiagFlush = now
+                    flushAudioDiag()
+                }
+
+                // Write-side latency watermark: AudioTrack drains in real
+                // time while this loop writes at decode pace — without a cap,
+                // any burst piles up inside the track buffer and lingers as
+                // sustained latency. Capacity is headroom, this is the bound.
+                val head = audioTrack?.playbackHeadPosition?.toLong() ?: 0L
+                val bufferedMs = (writtenFrames - head) * 1000 / SAMPLE_RATE
+                if (bufferedMs > TARGET_TRACK_BUFFER_MS) {
+                    playbackWake.poll(20, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    continue
+                }
+
+                // Talkspurt-start priming: hold the first frame(s) until a
+                // tiny backlog exists (depth 2) so the second frame isn't
+                // chased by an underrun — unless the oldest has waited too
+                // long already; onset delay is then capped at ~60ms
+                var totalDepth = 0
+                var oldestAge = Long.MAX_VALUE
+                for ((_, queue) in userQueues) {
+                    val s = queue.size
+                    if (s > 0) {
+                        totalDepth += s
+                        val age = queue.oldestAgeMs(now)
+                        if (age < oldestAge) oldestAge = age
+                    }
+                }
+                if (totalDepth in 1 until PRIME_MIN_FRAMES && oldestAge < PRIME_MAX_WAIT_MS) {
+                    playbackWake.poll(5, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    continue
+                }
 
                 for ((userId, queue) in userQueues) {
                     val decoder = userDecoders.getOrPut(userId) { OpusCodec(audioConfig) }
@@ -614,11 +666,6 @@ class AudioBridge(
                     if (queue.size > diag.queuePeak) diag.queuePeak = queue.size
                 }
 
-                if (now - lastDiagFlush >= DIAG_FLUSH_MS) {
-                    lastDiagFlush = now
-                    flushAudioDiag()
-                }
-
                 if (hasData) {
                     // Focus ducking multiplies the user gain — audio stays
                     // faintly audible under another app's short prompt
@@ -632,6 +679,7 @@ class AudioBridge(
                     }
                     val bytes = shortsToBytes(mixBuffer)
                     audioTrack?.write(bytes, 0, bytes.size)
+                    writtenFrames += FRAME_SIZE_SAMPLES
                 } else {
                     // No audio data — block until a frame arrives (producer
                     // offers the wake signal) or 20ms elapses. Instant speech

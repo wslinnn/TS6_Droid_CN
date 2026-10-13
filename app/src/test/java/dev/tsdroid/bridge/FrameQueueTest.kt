@@ -103,4 +103,17 @@ class FrameQueueTest {
         q.offer(ByteArray(1), 9)
         assertEquals(GAP_RESET, q.pollFirst()!!.gap)
     }
+
+    @Test
+    fun `oldestAgeMs tracks the oldest queued frame`() {
+        val q = FrameQueue(4)
+        assertEquals(Long.MAX_VALUE, q.oldestAgeMs(System.currentTimeMillis()))
+        q.offer(ByteArray(1), 1)
+        Thread.sleep(15)
+        q.offer(ByteArray(1), 2)
+        val age = q.oldestAgeMs(System.currentTimeMillis())
+        org.junit.Assert.assertTrue("age=$age", age >= 10)
+        q.clear()
+        assertEquals(Long.MAX_VALUE, q.oldestAgeMs(System.currentTimeMillis()))
+    }
 }
