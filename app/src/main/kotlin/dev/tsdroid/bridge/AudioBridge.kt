@@ -5,6 +5,8 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -13,6 +15,7 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
+import android.os.Build
 import dev.tsdroid.data.AppLog as Log
 import androidx.core.content.ContextCompat
 import dev.tslib.AudioConfig
@@ -128,6 +131,18 @@ class AudioBridge(
     private var acousticEchoCanceler: AcousticEchoCanceler? = null
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+    /**
+     * Re-asserts the communication route whenever the device set changes
+     * (headset/BT plug, unplug). The OS defaults IN_COMMUNICATION to the
+     * earpiece when nothing is connected and reverts to it on its own —
+     * every change must go through [applyCommRoute] again.
+     */
+    private val audioDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = applyCommRoute()
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) = applyCommRoute()
+    }
+
     private var audioFocusRequest: AudioFocusRequest? = null
 
     // Scope of the running capture — used to retry focus acquisition after
@@ -252,6 +267,11 @@ class AudioBridge(
             // Push-mode receive: frames are invoked from the native pump the
             // moment they arrive, skipping the event flow entirely
             tsClient.setAudioSink(audioSink)
+            // Route to the loudspeaker when no headset is connected, and keep
+            // it re-asserted across device changes (the callback also fires
+            // once right away with the current device set)
+            audioManager.registerAudioDeviceCallback(audioDeviceCallback, null)
+            applyCommRoute()
             // Field diagnostics: a silent session with the volume keys still
             // showing media almost always means this line says mode=0 — the
             // init error (if any) is logged just above
@@ -265,6 +285,40 @@ class AudioBridge(
             Log.e(TAG, "Audio init failed — playback stays down until re-join", e)
             // We don't throw here to prevent JE_AppCustomException
         }
+    }
+
+    /**
+     * Communication routing policy: with no headset connected, IN_COMMUNICATION
+     * defaults to the earpiece — unusable for a TS client — so force the
+     * built-in speaker. When a wired/BT headset IS connected, the system
+     * default already goes there, so clear any explicit pick and let it route.
+     */
+    private fun applyCommRoute() {
+        val headsetConnected = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
+            it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                it.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+        }
+        if (headsetConnected) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audioManager.clearCommunicationDevice()
+            } else {
+                audioManager.isSpeakerphoneOn = false
+            }
+            Log.i(TAG, "Comm route: headset connected → system default")
+            return
+        }
+        val applied = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val speaker = audioManager.availableCommunicationDevices.firstOrNull {
+                it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+            }
+            speaker != null && audioManager.setCommunicationDevice(speaker)
+        } else {
+            audioManager.isSpeakerphoneOn = true
+        }
+        Log.i(TAG, "Comm route: no headset → speaker (applied=$applied)")
     }
 
     /** Native-side callback — queues the frame and wakes the playback loop. */
@@ -821,7 +875,9 @@ class AudioBridge(
         userDiag.clear()
         userLastAudioAt.clear()
         userHungerStreak.clear()
-        // Leave the voice-call audio path
+        // Leave the voice-call audio path (unregister first so the callback
+        // cannot re-assert comm routing after the mode is restored)
+        runCatching { audioManager.unregisterAudioDeviceCallback(audioDeviceCallback) }
         audioManager.mode = AudioManager.MODE_NORMAL
     }
 
