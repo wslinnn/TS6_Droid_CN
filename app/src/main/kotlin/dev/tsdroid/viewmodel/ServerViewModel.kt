@@ -346,17 +346,12 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         // When current channel changes, query permissions if not already known
         viewModelScope.launch {
             combine(_channels, _rawUsers) { channels, users ->
-                val myId = tsClient?.clientId
-                Log.d(TAG, "PermCheck: tsClient=${tsClient != null}, clientId=$myId, channels=${channels.size}, users=${users.size}")
-                if (myId == null) return@combine null
-                val channelId = users.find { it.id == myId }?.channelId
-                if (channelId == null) { Log.d(TAG, "PermCheck: user not found in users list"); return@combine null }
+                val myId = tsClient?.clientId ?: return@combine null
+                val channelId = users.find { it.id == myId }?.channelId ?: return@combine null
                 val hints = channels.find { it.id == channelId }?.permissionHints ?: 0L
-                Log.d(TAG, "PermCheck: channelId=$channelId, hints=$hints")
                 channelId to hints
             }.collect { pair ->
                 val (channelId, hints) = pair ?: return@collect
-                Log.d(TAG, "PermCheck collect: channelId=$channelId, hints=$hints, queried=${queriedPermChannels}")
                 if (hints == 0L && channelId !in queriedPermChannels) {
                     queriedPermChannels.add(channelId)
                     Log.i(TAG, "No permission hints for channel $channelId, querying permoverview...")
