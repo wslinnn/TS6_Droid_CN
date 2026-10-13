@@ -41,6 +41,22 @@ class AudioBridge(
         const val SAMPLE_RATE = 48000
         const val CODEC_OPUS_VOICE = 4
         const val CODEC_OPUS_MUSIC = 5
+
+        /**
+         * Output gain stage with a soft knee: linear below half scale
+         * (unity listening is untouched), smoothly compressed above — an
+         * boosted mix tops out near full scale instead of hard-clipping.
+         * Slope-continuous at the knee (k=2 keeps the derivative at 1).
+         */
+        internal fun softClip(x: Float): Short {
+            val t = x / 32767f
+            val limited = when {
+                t > 0.5f -> 0.5f + 0.5f * (1f - 1f / (1f + (t - 0.5f) * 2f))
+                t < -0.5f -> -(0.5f + 0.5f * (1f - 1f / (1f + (-t - 0.5f) * 2f)))
+                else -> t
+            }
+            return (limited * 32767f).toInt().toShort()
+        }
         private const val FRAME_SIZE_MS = 20
         private const val FRAME_SIZE_SAMPLES = SAMPLE_RATE * FRAME_SIZE_MS / 1000 // 960
         private const val FRAME_SIZE_BYTES = FRAME_SIZE_SAMPLES * 2 // 16-bit PCM = 2 bytes/sample
@@ -672,9 +688,7 @@ class AudioBridge(
                     val gain = gainFactor * (if (duckedByFocus) DUCK_FACTOR else 1f)
                     if (gain != 1.0f) {
                         for (i in mixBuffer.indices) {
-                            mixBuffer[i] = (mixBuffer[i] * gain).toInt()
-                                .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-                                .toShort()
+                            mixBuffer[i] = softClip(mixBuffer[i] * gain)
                         }
                     }
                     val bytes = shortsToBytes(mixBuffer)
