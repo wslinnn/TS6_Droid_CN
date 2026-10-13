@@ -99,7 +99,7 @@ class VadGate(
         const val DEFAULT_THRESHOLD_DB = -45f
         const val HYSTERESIS_DB = 3f
         const val HANGOVER_MS = 400L
-        const val DEFAULT_PRE_ROLL_FRAMES = 15 // 300 ms at 20 ms frames
+        const val DEFAULT_PRE_ROLL_FRAMES = 8 // 160 ms at 20 ms frames
 
         fun dbToGain(db: Float): Float = 10.0.pow(db / 20.0).toFloat()
 

@@ -46,6 +46,15 @@ class AudioBridge(
         private const val FRAME_SIZE_BYTES = FRAME_SIZE_SAMPLES * 2 // 16-bit PCM = 2 bytes/sample
         private const val MAX_QUEUE_FRAMES = 10 // Max buffered frames per user
 
+        /** PLC frames injected while a talkspurt tail starves, before silence. */
+        private const val MAX_HUNGER_PLC_FRAMES = 3
+
+        /** A user counts as "still talking" for hunger-PLC this long after audio. */
+        private const val HUNGER_WINDOW_MS = 500L
+
+        /** Receive/encode diagnostics aggregation period. */
+        private const val DIAG_FLUSH_MS = 30_000L
+
         /** Output volume multiplier while another app holds transient focus (can-duck). */
         private const val DUCK_FACTOR = 0.3f
     }
@@ -58,6 +67,30 @@ class AudioBridge(
     // Per-user decoders and raw opus queues for playback mixing
     private val userDecoders = ConcurrentHashMap<Int, OpusCodec>()
     private val userQueues = ConcurrentHashMap<Int, FrameQueue>()
+
+    // Receive-concealment bookkeeping, keyed by user
+    private val userLastAudioAt = ConcurrentHashMap<Int, Long>()
+    private val userHungerStreak = ConcurrentHashMap<Int, Int>()
+
+    /** Per-user receive diagnostics, aggregated into AppLog every [DIAG_FLUSH_MS]. */
+    private class UserDiag {
+        var recv = 0
+        var lost = 0 // frames inferred missing from sequence gaps
+        var fecRepaired = 0
+        var plc = 0
+        var queuePeak = 0
+    }
+
+    private val userDiag = ConcurrentHashMap<Int, UserDiag>()
+    @Volatile
+    private var lastDiagFlush = System.currentTimeMillis()
+
+    // Encoder timing ring (µs per encode call) — validates the complexity-8
+    // CPU budget on real devices (frame budget is 20ms = 20000µs)
+    private val encodeSamplesUs = LongArray(512)
+    private var encodeSampleIdx = 0
+    @Volatile
+    private var encodeSampleCount = 0
 
     private var audioRecord: AudioRecord? = null
     private var audioTrack: AudioTrack? = null
@@ -140,6 +173,9 @@ class AudioBridge(
         }
         userQueues.keys.retainAll(activeIds)
         userGainsDb.keys.retainAll(activeIds)
+        userDiag.keys.retainAll(activeIds)
+        userLastAudioAt.keys.retainAll(activeIds)
+        userHungerStreak.keys.retainAll(activeIds)
     }
 
     private val _isMuted = MutableStateFlow(true) // Start muted (PTT default)
@@ -175,8 +211,8 @@ class AudioBridge(
 
     /** Native-side callback — queues the frame and wakes the playback loop. */
     private val audioSink = object : dev.tslib.AudioSink {
-        override fun onAudioFrame(userId: Int, data: ByteArray, isWhisper: Boolean) {
-            playAudio(userId, data)
+        override fun onAudioFrame(userId: Int, seq: Int, data: ByteArray, isWhisper: Boolean) {
+            playAudio(userId, seq, data)
         }
     }
 
@@ -282,7 +318,10 @@ class AudioBridge(
                         if (toSend != null) {
                             for (frame in toSend) {
                                 try {
-                                    tsClient.sendAudio(codec.encode(shortsToBytes(frame)), CODEC_OPUS_VOICE)
+                                    val t0 = System.nanoTime()
+                                    val encoded = codec.encode(shortsToBytes(frame))
+                                    recordEncodeUs((System.nanoTime() - t0) / 1000)
+                                    tsClient.sendAudio(encoded, CODEC_OPUS_VOICE)
                                 } catch (_: Exception) {}
                             }
                         }
@@ -298,7 +337,9 @@ class AudioBridge(
 
                         val pcmBytes = shortsToBytes(buffer)
                         try {
+                            val t0 = System.nanoTime()
                             val encoded = codec.encode(pcmBytes)
+                            recordEncodeUs((System.nanoTime() - t0) / 1000)
                             tsClient.sendAudio(encoded, CODEC_OPUS_VOICE)
                         } catch (_: Exception) {}
                     }
@@ -480,48 +521,102 @@ class AudioBridge(
     }
 
     /**
-     * Playback loop: decodes one opus frame per user, mixes PCM, writes
-     * one combined frame to AudioTrack. All decoder access is on this
-     * single thread so no synchronization is needed on decoders.
+     * Playback loop: decodes one opus frame per user, conceals detected
+     * loss, mixes PCM, writes one combined frame to AudioTrack. All decoder
+     * access is on this single thread so no synchronization is needed on
+     * decoders.
+     *
+     * Concealment policy (static, no adaptation): a gap of N≥1 missing
+     * frames recovers exactly the most recent one from the FEC data embedded
+     * in the surviving frame; anything older has no reference and its slot
+     * is skipped. When a talkspurt tail starves, up to
+     * [MAX_HUNGER_PLC_FRAMES] PLC frames extend it before going silent.
      */
     private fun startPlaybackLoop() {
         playbackJob = playbackScope.launch {
             val mixBuffer = ShortArray(FRAME_SIZE_SAMPLES)
             val decodeBuffer = ShortArray(FRAME_SIZE_SAMPLES)
 
+            // Sum one decoded frame into the mix buffer with per-user gain
+            fun mixIn(userId: Int, pcm: ByteArray): Boolean {
+                return try {
+                    bytesToShorts(pcm, decodeBuffer)
+                    val gainDb = userGainsDb[userId]
+                    if (gainDb != null && gainDb != 0f) {
+                        val g = VadGate.dbToGain(gainDb)
+                        for (i in mixBuffer.indices) {
+                            val sum = mixBuffer[i] + (decodeBuffer[i] * g).toInt()
+                            mixBuffer[i] = sum.coerceIn(
+                                Short.MIN_VALUE.toInt(),
+                                Short.MAX_VALUE.toInt(),
+                            ).toShort()
+                        }
+                    } else {
+                        // Mix: sum with clipping
+                        for (i in mixBuffer.indices) {
+                            val sum = mixBuffer[i].toInt() + decodeBuffer[i].toInt()
+                            mixBuffer[i] = sum.coerceIn(
+                                Short.MIN_VALUE.toInt(),
+                                Short.MAX_VALUE.toInt(),
+                            ).toShort()
+                        }
+                    }
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+            }
+
             while (isActive) {
                 var hasData = false
                 mixBuffer.fill(0)
+                val now = System.currentTimeMillis()
 
                 for ((userId, queue) in userQueues) {
-                    val opusData = queue.pollFirst() ?: continue
                     val decoder = userDecoders.getOrPut(userId) { OpusCodec(audioConfig) }
-                    try {
-                        val pcmBytes = decoder.decode(opusData)
-                        bytesToShorts(pcmBytes, decodeBuffer)
-                        hasData = true
-                        // Per-user gain (dB) applied before summing
-                        val gainDb = userGainsDb[userId]
-                        if (gainDb != null && gainDb != 0f) {
-                            val g = VadGate.dbToGain(gainDb)
-                            for (i in mixBuffer.indices) {
-                                val sum = mixBuffer[i] + (decodeBuffer[i] * g).toInt()
-                                mixBuffer[i] = sum.coerceIn(
-                                    Short.MIN_VALUE.toInt(),
-                                    Short.MAX_VALUE.toInt(),
-                                ).toShort()
-                            }
-                        } else {
-                            // Mix: sum with clipping
-                            for (i in mixBuffer.indices) {
-                                val sum = mixBuffer[i].toInt() + decodeBuffer[i].toInt()
-                                mixBuffer[i] = sum.coerceIn(
-                                    Short.MIN_VALUE.toInt(),
-                                    Short.MAX_VALUE.toInt(),
-                                ).toShort()
+                    val entry = queue.pollFirst()
+                    if (entry == null) {
+                        // Hunger: if this user was talking moments ago, bridge
+                        // the tail with PLC for a few frames, then fall silent
+                        val lastAudio = userLastAudioAt[userId] ?: continue
+                        val streak = userHungerStreak.getOrPut(userId) { 0 }
+                        if (streak < MAX_HUNGER_PLC_FRAMES && now - lastAudio < HUNGER_WINDOW_MS) {
+                            if (mixIn(userId, decoder.decodePlc())) {
+                                hasData = true
+                                userHungerStreak[userId] = streak + 1
+                                userDiag.getOrPut(userId) { UserDiag() }.plc++
                             }
                         }
+                        continue
+                    }
+                    userHungerStreak[userId] = 0
+                    userLastAudioAt[userId] = now
+
+                    try {
+                        if (entry.gap > 0) {
+                            // Recover the frame right before this one from its
+                            // embedded FEC data; earlier gaps stay silent
+                            if (mixIn(userId, decoder.decode(entry.frame, true))) {
+                                hasData = true
+                            }
+                        }
+                        if (mixIn(userId, decoder.decode(entry.frame))) {
+                            hasData = true
+                        }
                     } catch (_: Exception) {}
+
+                    val diag = userDiag.getOrPut(userId) { UserDiag() }
+                    diag.recv++
+                    if (entry.gap > 0) {
+                        diag.lost += entry.gap
+                        diag.fecRepaired++
+                    }
+                    if (queue.size > diag.queuePeak) diag.queuePeak = queue.size
+                }
+
+                if (now - lastDiagFlush >= DIAG_FLUSH_MS) {
+                    lastDiagFlush = now
+                    flushAudioDiag()
                 }
 
                 if (hasData) {
@@ -555,13 +650,13 @@ class AudioBridge(
         mutedUserIds = userIds
     }
 
-    fun playAudio(userId: Int, opusData: ByteArray) {
+    fun playAudio(userId: Int, seq: Int, opusData: ByteArray) {
         if (userId in mutedUserIds) return
         if (_isOutputMuted.value) return // Global output mute — discard incoming audio
         if (outputSuspendedByFocus) return // Another app holds focus — discard instead of queueing
         val queue = userQueues.getOrPut(userId) { FrameQueue(MAX_QUEUE_FRAMES) }
         // Full queue evicts the OLDEST frame: fresh speech beats stale speech
-        queue.offer(opusData)
+        queue.offer(opusData, seq)
         playbackWake.offer(Unit)
     }
 
@@ -610,6 +705,37 @@ class AudioBridge(
         }
         userDecoders.clear()
         userQueues.clear()
+        userDiag.clear()
+        userLastAudioAt.clear()
+        userHungerStreak.clear()
+    }
+
+    /** Emit the 30s receive/encode diagnostic aggregates into AppLog. */
+    private fun flushAudioDiag() {
+        for ((userId, d) in userDiag) {
+            if (d.recv > 0 || d.lost > 0 || d.plc > 0) {
+                Log.i(TAG, "AudioRx user=$userId 30s: recv=${d.recv} lost=${d.lost} fec=${d.fecRepaired} plc=${d.plc} queuePeak=${d.queuePeak}")
+            }
+            d.recv = 0
+            d.lost = 0
+            d.fecRepaired = 0
+            d.plc = 0
+            d.queuePeak = 0
+        }
+        val n = encodeSampleCount
+        if (n > 0) {
+            encodeSampleCount = 0
+            val samples = encodeSamplesUs.take(n.coerceAtMost(encodeSamplesUs.size)).sorted()
+            val p95 = samples[(samples.size * 95 / 100).coerceIn(0, samples.size - 1)]
+            Log.i(TAG, "AudioEnc 30s: n=${samples.size} p95=${p95}us max=${samples.last()}us (budget 20000us)")
+        }
+    }
+
+    /** Record one encoder call duration (µs) into the diagnostics ring. */
+    private fun recordEncodeUs(us: Long) {
+        encodeSamplesUs[encodeSampleIdx and (encodeSamplesUs.size - 1)] = us
+        encodeSampleIdx++
+        encodeSampleCount++
     }
 
     private fun shortsToBytes(shorts: ShortArray): ByteArray {
