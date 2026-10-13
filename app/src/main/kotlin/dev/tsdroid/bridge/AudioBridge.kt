@@ -682,9 +682,11 @@ class AudioBridge(
                     writtenFrames += FRAME_SIZE_SAMPLES
                 } else {
                     // No audio data — block until a frame arrives (producer
-                    // offers the wake signal) or 20ms elapses. Instant speech
-                    // onset and zero wakeups during silence.
-                    playbackWake.poll(20, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    // offers the wake signal) or the idle safety-net timeout
+                    // elapses. Speech onset is still instant (offer wakes the
+                    // loop immediately); the long timeout just keeps silence
+                    // at ~4 wakeups/s instead of 50.
+                    playbackWake.poll(250, java.util.concurrent.TimeUnit.MILLISECONDS)
                 }
             }
         }
