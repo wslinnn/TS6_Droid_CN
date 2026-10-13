@@ -62,7 +62,7 @@ class AudioBridge(
 
     // Per-user decoders and raw opus queues for playback mixing
     private val userDecoders = ConcurrentHashMap<Int, OpusCodec>()
-    private val userQueues = ConcurrentHashMap<Int, ArrayDeque<ByteArray>>()
+    private val userQueues = ConcurrentHashMap<Int, FrameQueue>()
 
     private var audioRecord: AudioRecord? = null
     private var audioTrack: AudioTrack? = null
@@ -431,7 +431,7 @@ class AudioBridge(
             // Discard anything queued — a resume after a focus gap must not
             // replay stale audio
             for ((_, queue) in userQueues) {
-                synchronized(queue) { queue.clear() }
+                queue.clear()
             }
         }
     }
@@ -504,7 +504,7 @@ class AudioBridge(
                 mixBuffer.fill(0)
 
                 for ((userId, queue) in userQueues) {
-                    val opusData = synchronized(queue) { queue.pollFirst() } ?: continue
+                    val opusData = queue.pollFirst() ?: continue
                     val decoder = userDecoders.getOrPut(userId) { OpusCodec(audioConfig) }
                     try {
                         val pcmBytes = decoder.decode(opusData)
@@ -569,13 +569,9 @@ class AudioBridge(
         if (userId in mutedUserIds) return
         if (_isOutputMuted.value) return // Global output mute — discard incoming audio
         if (outputSuspendedByFocus) return // Another app holds focus — discard instead of queueing
-        val queue = userQueues.getOrPut(userId) { ArrayDeque() }
-        synchronized(queue) {
-            if (queue.size < MAX_QUEUE_FRAMES) {
-                queue.addLast(opusData)
-            }
-            // Drop oldest if queue is full (prevents unbounded lag)
-        }
+        val queue = userQueues.getOrPut(userId) { FrameQueue(MAX_QUEUE_FRAMES) }
+        // Full queue evicts the OLDEST frame: fresh speech beats stale speech
+        queue.offer(opusData)
         playbackWake.offer(Unit)
     }
 
@@ -595,7 +591,7 @@ class AudioBridge(
         // When output is muted, clear all queued audio so nothing plays
         if (muted) {
             for ((_, queue) in userQueues) {
-                synchronized(queue) { queue.clear() }
+                queue.clear()
             }
         }
     }
