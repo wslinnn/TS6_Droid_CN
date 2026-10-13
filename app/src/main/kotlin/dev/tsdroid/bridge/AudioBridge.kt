@@ -248,8 +248,17 @@ class AudioBridge(
             // Push-mode receive: frames are invoked from the native pump the
             // moment they arrive, skipping the event flow entirely
             tsClient.setAudioSink(audioSink)
+            // Field diagnostics: a silent session with the volume keys still
+            // showing media almost always means this line says track=null or
+            // callVol=0 — the init error (if any) is logged just above
+            Log.i(
+                TAG,
+                "Voice path init: mode=${audioManager.mode} track=${audioTrack != null} " +
+                    "callVol=${audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL)}/" +
+                    audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL),
+            )
         } catch (e: Exception) {
-            android.util.Log.e("TS6_DEBUG", "Caught audio initialization friction safely", e)
+            Log.e(TAG, "Audio init failed — playback stays down until re-join", e)
             // We don't throw here to prevent JE_AppCustomException
         }
     }
@@ -553,7 +562,19 @@ class AudioBridge(
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
         )
-        audioTrack = AudioTrack.Builder()
+        audioTrack = buildAudioTrack(minBuf, lowLatency = true)
+        if (audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
+            // Some devices reject PERFORMANCE_MODE_LOW_LATENCY for voice-usage
+            // tracks — fall back to a plain track rather than going silent
+            Log.w(TAG, "Low-latency voice track not initialized; retrying without performance mode")
+            audioTrack?.release()
+            audioTrack = buildAudioTrack(minBuf, lowLatency = false)
+        }
+        audioTrack?.play()
+    }
+
+    private fun buildAudioTrack(minBuf: Int, lowLatency: Boolean): AudioTrack {
+        val builder = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -568,9 +589,10 @@ class AudioBridge(
                     .build()
             )
             .setBufferSizeInBytes(maxOf(minBuf, FRAME_SIZE_BYTES * TRACK_BUFFER_FRAMES))
-            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-            .build()
-        audioTrack?.play()
+        if (lowLatency) {
+            builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+        }
+        return builder.build()
     }
 
     /**
