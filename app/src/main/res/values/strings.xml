@@ -46,6 +46,8 @@
     <string name="settings">Paramètres</string>
     <string name="audio_gain">Gain audio</string>
     <string name="audio_gain_value">×%1$.1f</string>
+    <string name="mic_gain">Gain micro</string>
+    <string name="gain_percent">%1$d%%</string>
     <string name="show_link_thumbnails">Miniatures des liens vidéo</string>
     <string name="auto_load_images">Charger les images automatiquement</string>
     <string name="enable_floating_window">Activer la fenêtre flottante</string>

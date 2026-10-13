@@ -160,6 +160,15 @@ class AudioBridge(
     @Volatile
     var gainFactor: Float = 1.0f
 
+    /**
+     * Manual mic gain multiplier applied to captured samples before VAD and
+     * encoding. 1.0 = unity; 0 = mic off (the capture loop skips VAD and
+     * transmission entirely); values above 1 are soft-clipped against
+     * full scale so a loud room cannot hard-clip the boosted signal.
+     */
+    @Volatile
+    var micGainFactor: Float = 1.0f
+
     @Volatile
     var micMode: MicMode = MicMode.PTT
         private set
@@ -340,7 +349,15 @@ class AudioBridge(
                     Log.e(TAG, "Microphone read returned error $read")
                     break
                 }
-                if (read == FRAME_SIZE_SAMPLES && !_isMuted.value) {
+                if (read == FRAME_SIZE_SAMPLES && !_isMuted.value && micGainFactor != 0f) {
+                    // Mic gain is applied before VAD and encode so "turn it up
+                    // and be heard" behaves uniformly in both mic modes
+                    val gain = micGainFactor
+                    if (gain != 1f) {
+                        for (i in 0 until read) {
+                            buffer[i] = softClip(buffer[i] * gain)
+                        }
+                    }
                     if (micMode == MicMode.VAD) {
                         // Gate transmission on the voice-activation state machine
                         vadGate.openThresholdDb = vadThresholdDb
@@ -718,6 +735,7 @@ class AudioBridge(
         if (userId in mutedUserIds) return
         if (_isOutputMuted.value) return // Global output mute — discard incoming audio
         if (outputSuspendedByFocus) return // Another app holds focus — discard instead of queueing
+        if (gainFactor == 0f) return // Speaker slider at 0% — same as muted
         val queue = userQueues.getOrPut(userId) { FrameQueue(MAX_QUEUE_FRAMES) }
         // Full queue evicts the OLDEST frame: fresh speech beats stale speech
         queue.offer(opusData, seq)

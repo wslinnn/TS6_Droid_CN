@@ -270,6 +270,9 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     val audioGain: StateFlow<Float> = settingsStore.audioGain
         .stateIn(viewModelScope, SharingStarted.Eagerly, 1.0f)
 
+    val micGain: StateFlow<Float> = settingsStore.micGain
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 1.0f)
+
     val showLinkThumbnails: StateFlow<Boolean> = settingsStore.showLinkThumbnails
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
@@ -513,6 +516,13 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             viewModelScope.launch {
                 audioGain.collect { gain ->
                     service.audioBridge.gainFactor = gain
+                }
+            }
+            // Apply persisted mic gain
+            service.audioBridge.micGainFactor = micGain.value
+            viewModelScope.launch {
+                micGain.collect { gain ->
+                    service.audioBridge.micGainFactor = gain
                 }
             }
             // Observe audio state for local talking status

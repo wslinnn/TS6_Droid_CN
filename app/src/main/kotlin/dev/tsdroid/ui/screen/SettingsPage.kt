@@ -414,6 +414,7 @@ fun AudioSection() {
     val micMode by settingsStore.micMode.collectAsStateWithLifecycle(initialValue = MicMode.PTT)
     val vadThreshold by settingsStore.vadThresholdDb.collectAsStateWithLifecycle(initialValue = VadGate.DEFAULT_THRESHOLD_DB)
     val audioGain by settingsStore.audioGain.collectAsStateWithLifecycle(initialValue = 1.0f)
+    val micGain by settingsStore.micGain.collectAsStateWithLifecycle(initialValue = 1.0f)
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -423,11 +424,11 @@ fun AudioSection() {
         Column(modifier = Modifier.padding(vertical = 4.dp)) {
             SettingsSectionTitle(stringResource(R.string.section_audio))
 
-            // 音量增益
+            // 音量增益（0% = 扬声器关）
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
                 var gainValue by remember(audioGain) { mutableFloatStateOf(audioGain) }
                 Text(
-                    text = "${stringResource(R.string.audio_gain)} : ${stringResource(R.string.audio_gain_value, gainValue)}",
+                    text = "${stringResource(R.string.audio_gain)} : ${stringResource(R.string.gain_percent, (gainValue * 100).roundToInt())}",
                     style = MaterialTheme.typography.bodyLarge,
                 )
                 Spacer(Modifier.height(4.dp))
@@ -435,8 +436,25 @@ fun AudioSection() {
                     value = gainValue,
                     onValueChange = { gainValue = it },
                     onValueChangeFinished = { scope.launch { settingsStore.setAudioGain(gainValue) } },
-                    valueRange = 1.0f..8.0f,
-                    steps = 13,
+                    valueRange = 0.0f..8.0f,
+                    steps = 31,
+                )
+            }
+
+            // 麦克风增益（0% = 关麦）
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                var micGainValue by remember(micGain) { mutableFloatStateOf(micGain) }
+                Text(
+                    text = "${stringResource(R.string.mic_gain)} : ${stringResource(R.string.gain_percent, (micGainValue * 100).roundToInt())}",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Spacer(Modifier.height(4.dp))
+                Slider(
+                    value = micGainValue,
+                    onValueChange = { micGainValue = it },
+                    onValueChangeFinished = { scope.launch { settingsStore.setMicGain(micGainValue) } },
+                    valueRange = 0.0f..4.0f,
+                    steps = 15,
                 )
             }
 

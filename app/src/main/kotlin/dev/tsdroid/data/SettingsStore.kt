@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.map
 private val Context.settingsDataStore by preferencesDataStore(name = "settings")
 
 private val KEY_AUDIO_GAIN = floatPreferencesKey("audio_gain")
+private val KEY_MIC_GAIN = floatPreferencesKey("mic_gain")
 private val KEY_SHOW_LINK_THUMBNAILS = booleanPreferencesKey("show_link_thumbnails")
 private val KEY_AUTO_LOAD_IMAGES = booleanPreferencesKey("auto_load_images")
 private val KEY_LANGUAGE = stringPreferencesKey("language")
@@ -39,6 +40,10 @@ class SettingsStore(private val context: Context) {
     val audioGain: Flow<Float> = context.settingsDataStore.data
         .map { it[KEY_AUDIO_GAIN] ?: 1.0f }
 
+    /** Manual mic gain multiplier: 0 = mic off, 4 = +12 dB boost. */
+    val micGain: Flow<Float> = context.settingsDataStore.data
+        .map { it[KEY_MIC_GAIN] ?: 1.0f }
+
     val showLinkThumbnails: Flow<Boolean> = context.settingsDataStore.data
         .map { it[KEY_SHOW_LINK_THUMBNAILS] ?: false }
 
@@ -59,6 +64,10 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setAudioGain(gain: Float) {
         context.settingsDataStore.edit { it[KEY_AUDIO_GAIN] = gain }
+    }
+
+    suspend fun setMicGain(gain: Float) {
+        context.settingsDataStore.edit { it[KEY_MIC_GAIN] = gain }
     }
 
     suspend fun setShowLinkThumbnails(enabled: Boolean) {
