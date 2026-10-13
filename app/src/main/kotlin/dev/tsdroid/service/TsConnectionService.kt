@@ -79,6 +79,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -1077,7 +1078,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                                 .fillMaxWidth()
                                 .padding(vertical = 8.dp)
                         ) {
-                            items(activeUsers) { user ->
+                            items(activeUsers, key = { it.id }) { user ->
                                 val isSpeaking = if (user.id == myId) (isLocalVoiceActive || overlayActiveSpeakerId == myId) else user.id == overlayActiveSpeakerId
                                 Row(
                                     modifier = Modifier
@@ -1087,15 +1088,22 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                                 ) {
                                     // Use smaller avatar for the expanded list instead of green dot
                                     var avatarBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
-                                    
+
                                     LaunchedEffect(user.uid) {
                                         if (!user.uid.isNullOrEmpty()) {
                                             val cached = avatarCache.getAvatar(user.uid)
                                             if (cached != null) {
                                                 avatarBitmap = cached
                                             } else if (!avatarCache.hasNoAvatar(user.uid)) {
+                                                // The download spans several user-list
+                                                // re-emissions (connect storm) — on resume,
+                                                // skip the write if this slot was recreated:
+                                                // writing a disposed remember state races
+                                                // composition apply and crashes the Recomposer
                                                 avatarCache.loadAvatar(user.uid, tsClient)
-                                                avatarBitmap = avatarCache.getAvatar(user.uid)
+                                                if (isActive) {
+                                                    avatarBitmap = avatarCache.getAvatar(user.uid)
+                                                }
                                             }
                                         }
                                     }
