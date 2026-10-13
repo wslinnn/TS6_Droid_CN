@@ -232,15 +232,19 @@ class AudioBridge(
 
     fun initialize() {
         try {
+            // Tear the old (media-usage) track down BEFORE switching modes —
+            // an active media track makes the audio policy keep/revert
+            // MODE_NORMAL, which silently kills the whole voice-path switch
+            audioTrack?.stop()
+            audioTrack?.release()
+            audioTrack = null
+
             // Voice-call audio path: comm mode routes playback to the call
             // volume stream (calibrated louder for speech), engages platform
             // comms loudness/DSP and auto-routes Bluetooth via SCO. Session
             // lifetime = this service's audio lifetime.
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-            // Explicitly release any old audio stream resources if lingering
-            audioTrack?.stop()
-            audioTrack?.release()
-            audioTrack = null
+            Log.d(TAG, "setMode(IN_COMMUNICATION) → read back ${audioManager.mode}")
 
             encoder = OpusCodec(audioConfig)
             initAudioTrack()
@@ -249,8 +253,8 @@ class AudioBridge(
             // moment they arrive, skipping the event flow entirely
             tsClient.setAudioSink(audioSink)
             // Field diagnostics: a silent session with the volume keys still
-            // showing media almost always means this line says track=null or
-            // callVol=0 — the init error (if any) is logged just above
+            // showing media almost always means this line says mode=0 — the
+            // init error (if any) is logged just above
             Log.i(
                 TAG,
                 "Voice path init: mode=${audioManager.mode} track=${audioTrack != null} " +
