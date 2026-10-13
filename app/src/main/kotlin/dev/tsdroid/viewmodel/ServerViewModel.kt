@@ -427,6 +427,10 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                     Log.d(TAG, "Channels updated: ${channels.size}")
                     _channels.value = channels
                     loadChannelIcons(channels)
+                    // Backup trigger: the users flow's first emission can race
+                    // clientId assignment — re-checking here makes the profile
+                    // application self-healing (deduped by the profile key)
+                    applyChannelAudioProfile()
                 }
             }
             viewModelScope.launch {
@@ -435,7 +439,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                     loadAvatars(it)
                     syncUserAudio(it)
                     mergeLegacyConversations(it)
-                    applyChannelAudioProfile(it)
+                    applyChannelAudioProfile()
                 }
             }
             viewModelScope.launch {
@@ -1005,12 +1009,13 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * Apply the static per-channel encoder profile when our own channel (or
      * its codec/quality as reported by the server) changes. Pure table
-     * lookup in [AudioProfiles] — no runtime adaptation.
+     * lookup in [AudioProfiles] — no runtime adaptation. Called from both
+     * the users and channels collectors; the profile key dedupes repeats.
      */
-    private fun applyChannelAudioProfile(users: List<User>) {
+    private fun applyChannelAudioProfile() {
         val client = tsClient ?: return
         val myId = client.clientId ?: return
-        val channelId = users.find { it.id == myId }?.channelId ?: return
+        val channelId = _rawUsers.value.find { it.id == myId }?.channelId ?: return
         val channel = client.channels.value.find { it.id == channelId } ?: return
         val key = "${channel.id}:${channel.codec}:${channel.codecQuality}"
         if (key == appliedAudioProfileKey) return
