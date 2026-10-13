@@ -231,6 +231,11 @@ class AudioBridge(
 
     fun initialize() {
         try {
+            // Voice-call audio path: comm mode routes playback to the call
+            // volume stream (calibrated louder for speech), engages platform
+            // comms loudness/DSP and auto-routes Bluetooth via SCO. Session
+            // lifetime = this service's audio lifetime.
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             // Explicitly release any old audio stream resources if lingering
             audioTrack?.stop()
             audioTrack?.release()
@@ -550,7 +555,7 @@ class AudioBridge(
         audioTrack = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_GAME)
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
@@ -790,6 +795,8 @@ class AudioBridge(
         userDiag.clear()
         userLastAudioAt.clear()
         userHungerStreak.clear()
+        // Leave the voice-call audio path
+        audioManager.mode = AudioManager.MODE_NORMAL
     }
 
     /** Emit the 30s receive/encode diagnostic aggregates into AppLog. */
