@@ -151,6 +151,9 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     private var audioBridge: AudioBridge? = null
     private var connectionService: TsConnectionService? = null
 
+    // "channelId:codec:quality" of the last applied static encoder profile
+    private var appliedAudioProfileKey: String? = null
+
     private val _channels = MutableStateFlow<List<Channel>>(emptyList())
     val channels: StateFlow<List<Channel>> = _channels.asStateFlow()
 
@@ -432,6 +435,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                     loadAvatars(it)
                     syncUserAudio(it)
                     mergeLegacyConversations(it)
+                    applyChannelAudioProfile(it)
                 }
             }
             viewModelScope.launch {
@@ -996,6 +1000,22 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userAudioStore.setVolumeDb(addr, user.uid, if (db == 0f) null else db)
         }
+    }
+
+    /**
+     * Apply the static per-channel encoder profile when our own channel (or
+     * its codec/quality as reported by the server) changes. Pure table
+     * lookup in [AudioProfiles] — no runtime adaptation.
+     */
+    private fun applyChannelAudioProfile(users: List<User>) {
+        val client = tsClient ?: return
+        val myId = client.clientId ?: return
+        val channelId = users.find { it.id == myId }?.channelId ?: return
+        val channel = client.channels.value.find { it.id == channelId } ?: return
+        val key = "${channel.id}:${channel.codec}:${channel.codecQuality}"
+        if (key == appliedAudioProfileKey) return
+        appliedAudioProfileKey = key
+        audioBridge?.applyChannelProfile(channel.codecQuality.toInt(), channel.codec.toInt())
     }
 
     /**

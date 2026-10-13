@@ -40,6 +40,7 @@ class AudioBridge(
         private const val TAG = "AudioBridge"
         const val SAMPLE_RATE = 48000
         const val CODEC_OPUS_VOICE = 4
+        const val CODEC_OPUS_MUSIC = 5
         private const val FRAME_SIZE_MS = 20
         private const val FRAME_SIZE_SAMPLES = SAMPLE_RATE * FRAME_SIZE_MS / 1000 // 960
         private const val FRAME_SIZE_BYTES = FRAME_SIZE_SAMPLES * 2 // 16-bit PCM = 2 bytes/sample
@@ -427,6 +428,28 @@ class AudioBridge(
             for ((_, queue) in userQueues) {
                 queue.clear()
             }
+        }
+    }
+
+    /**
+     * Apply the static per-channel encoder profile. Called on join and on
+     * channel switch with the values the server reports for the channel —
+     * a pure configuration apply, no runtime adaptation. The encoder keeps
+     * these settings until the next call.
+     */
+    fun applyChannelProfile(quality: Int, codec: Int) {
+        val codecRef = encoder ?: return
+        if (codec == CODEC_OPUS_MUSIC) {
+            Log.i(TAG, "Channel uses Opus Music (codec 5) — music mode not implemented, using voice profile")
+        }
+        val profile = AudioProfiles.resolve(quality)
+        try {
+            codecRef.setBitrate(profile.bitrate)
+            codecRef.setFec(profile.fecEnabled)
+            codecRef.setExpectedPacketLoss(profile.expectedPacketLossPercent)
+            Log.i(TAG, "Channel audio profile: quality=$quality codec=$codec bitrate=${profile.bitrate} fec=on(${profile.expectedPacketLossPercent}%)")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to apply channel audio profile", e)
         }
     }
 
