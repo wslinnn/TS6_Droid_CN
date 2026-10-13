@@ -644,10 +644,10 @@ fun ServerScreen(
     UserPanelSheet(
         user = panelUser,
         avatar = panelUser?.uid?.let { userAvatars[it] },
-        volumeDb = userPanelUserId?.let { userVolumes[it] } ?: 0f,
+        volumeFactor = userPanelUserId?.let { userVolumes[it] } ?: 1f,
         isMuted = userPanelUserId != null && userPanelUserId in mutedUserIds,
-        onVolumeChange = { db -> userPanelUserId?.let { viewModel.setUserVolumeDb(it, db, commit = false) } },
-        onVolumeCommit = { db -> userPanelUserId?.let { viewModel.setUserVolumeDb(it, db, commit = true) } },
+        onVolumeChange = { factor -> userPanelUserId?.let { viewModel.setUserVolumeFactor(it, factor, commit = false) } },
+        onVolumeCommit = { factor -> userPanelUserId?.let { viewModel.setUserVolumeFactor(it, factor, commit = true) } },
         onToggleMute = { userPanelUserId?.let { viewModel.toggleMuteUser(it) } },
         onPrivateMessage = {
             val id = userPanelUserId

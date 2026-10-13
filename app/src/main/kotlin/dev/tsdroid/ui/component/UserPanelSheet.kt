@@ -44,7 +44,7 @@ import kotlin.math.roundToInt
 fun UserPanelSheet(
     user: User?,
     avatar: ImageBitmap?,
-    volumeDb: Float,
+    volumeFactor: Float,
     isMuted: Boolean,
     onVolumeChange: (Float) -> Unit,
     onVolumeCommit: (Float) -> Unit,
@@ -83,7 +83,7 @@ fun UserPanelSheet(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
             VolumeSlider(
-                initialDb = volumeDb,
+                initialFactor = volumeFactor,
                 defaultLabel = stringResource(R.string.volume_default),
                 onVolumeChange = onVolumeChange,
                 onVolumeCommit = onVolumeCommit,
@@ -163,42 +163,37 @@ private fun UserInfoRow(label: String, value: String) {
 
 @Composable
 private fun VolumeSlider(
-    initialDb: Float,
+    initialFactor: Float,
     defaultLabel: String,
     onVolumeChange: (Float) -> Unit,
     onVolumeCommit: (Float) -> Unit,
 ) {
-    var db by remember(initialDb) { mutableFloatStateOf(initialDb) }
+    var factor by remember(initialFactor) { mutableFloatStateOf(initialFactor) }
     Column {
         Text(
-            text = stringResource(R.string.user_volume) + " " + formatDb(db, defaultLabel),
+            text = stringResource(R.string.user_volume) + " " + formatPercent(factor, defaultLabel),
             style = MaterialTheme.typography.bodyMedium,
         )
         Slider(
-            value = db,
+            value = factor,
             onValueChange = {
-                db = it
+                factor = it
                 onVolumeChange(it)
             },
-            onValueChangeFinished = { onVolumeCommit(db) },
-            valueRange = -30f..15f,
-            steps = 44,
+            onValueChangeFinished = { onVolumeCommit(factor) },
+            valueRange = 0f..6f,
         )
         TextButton(onClick = {
-            db = 0f
-            onVolumeChange(0f)
-            onVolumeCommit(0f)
+            factor = 1f
+            onVolumeChange(1f)
+            onVolumeCommit(1f)
         }) {
             Text(stringResource(R.string.volume_reset))
         }
     }
 }
 
-private fun formatDb(db: Float, defaultLabel: String): String {
-    val rounded = db.roundToInt()
-    return if (rounded == 0) {
-        "0 dB ($defaultLabel)"
-    } else {
-        (if (rounded > 0) "+$rounded" else "$rounded") + " dB"
-    }
+private fun formatPercent(factor: Float, defaultLabel: String): String {
+    val percent = (factor * 100).roundToInt()
+    return if (percent == 100) "100% ($defaultLabel)" else "$percent%"
 }

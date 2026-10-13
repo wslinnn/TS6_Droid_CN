@@ -191,11 +191,12 @@ class AudioBridge(
     @Volatile
     private var mutedUserIds: Set<Int> = emptySet()
 
-    // Per-user playback gain in dB (keyed by client id, session-scoped)
-    private val userGainsDb = ConcurrentHashMap<Int, Float>()
+    // Per-user playback gain as a linear multiplier (keyed by client id,
+    // session-scoped; 1.0 = unity)
+    private val userGainFactors = ConcurrentHashMap<Int, Float>()
 
-    fun setUserGainDb(userId: Int, db: Float) {
-        if (db == 0f) userGainsDb.remove(userId) else userGainsDb[userId] = db
+    fun setUserGainFactor(userId: Int, factor: Float) {
+        if (factor == 1f) userGainFactors.remove(userId) else userGainFactors[userId] = factor
     }
 
     /**
@@ -211,7 +212,7 @@ class AudioBridge(
             }
         }
         userQueues.keys.retainAll(activeIds)
-        userGainsDb.keys.retainAll(activeIds)
+        userGainFactors.keys.retainAll(activeIds)
         userDiag.keys.retainAll(activeIds)
         userLastAudioAt.keys.retainAll(activeIds)
         userHungerStreak.keys.retainAll(activeIds)
@@ -596,11 +597,10 @@ class AudioBridge(
             fun mixIn(userId: Int, pcm: ByteArray): Boolean {
                 return try {
                     bytesToShorts(pcm, decodeBuffer)
-                    val gainDb = userGainsDb[userId]
-                    if (gainDb != null && gainDb != 0f) {
-                        val g = VadGate.dbToGain(gainDb)
+                    val factor = userGainFactors[userId]
+                    if (factor != null && factor != 1f) {
                         for (i in mixBuffer.indices) {
-                            val sum = mixBuffer[i] + (decodeBuffer[i] * g).toInt()
+                            val sum = mixBuffer[i] + (decodeBuffer[i] * factor).toInt()
                             mixBuffer[i] = sum.coerceIn(
                                 Short.MIN_VALUE.toInt(),
                                 Short.MAX_VALUE.toInt(),

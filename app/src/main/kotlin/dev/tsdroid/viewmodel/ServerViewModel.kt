@@ -994,20 +994,20 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Apply a per-user volume in dB. Drag updates pass commit=false (bridge
-     * only); the final value is committed with commit=true to persist it for
-     * future sessions.
+     * Apply a per-user volume as a linear multiplier (1.0 = unity). Drag
+     * updates pass commit=false (bridge only); the final value is committed
+     * with commit=true to persist it for future sessions.
      */
-    fun setUserVolumeDb(clientId: Int, db: Float, commit: Boolean) {
-        audioBridge?.setUserGainDb(clientId, db)
-        _userVolumes.value = if (db == 0f) _userVolumes.value - clientId else _userVolumes.value + (clientId to db)
+    fun setUserVolumeFactor(clientId: Int, factor: Float, commit: Boolean) {
+        audioBridge?.setUserGainFactor(clientId, factor)
+        _userVolumes.value = if (factor == 1f) _userVolumes.value - clientId else _userVolumes.value + (clientId to factor)
         if (!commit) return
         val user = _rawUsers.value.find { it.id == clientId } ?: return
         val addr = tsClient?.serverAddress ?: return
         if (user.uid.isNullOrEmpty()) return
-        if (db == 0f) volumeByUid.remove(user.uid) else volumeByUid[user.uid] = db
+        if (factor == 1f) volumeByUid.remove(user.uid) else volumeByUid[user.uid] = factor
         viewModelScope.launch {
-            userAudioStore.setVolumeDb(addr, user.uid, if (db == 0f) null else db)
+            userAudioStore.setVolumeFactor(addr, user.uid, if (factor == 1f) null else factor)
         }
     }
 
@@ -1047,14 +1047,14 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             for (user in users) {
                 if (user.id == myId || user.uid.isNullOrEmpty() || user.uid in loadedVolumeUids) continue
                 loadedVolumeUids.add(user.uid)
-                userAudioStore.volumeDb(addr, user.uid)?.let { volumeByUid[user.uid] = it }
+                userAudioStore.volumeFactor(addr, user.uid)?.let { volumeByUid[user.uid] = it }
                 if (userAudioStore.muted(addr, user.uid) == true) {
                     persistedMutedUids = persistedMutedUids + user.uid
                 }
             }
             val uidToClientId = users.filter { !it.uid.isNullOrEmpty() }.associate { it.uid to it.id }
-            val derived = volumeByUid.entries.mapNotNull { (uid, db) ->
-                uidToClientId[uid]?.let { it to db }
+            val derived = volumeByUid.entries.mapNotNull { (uid, factor) ->
+                uidToClientId[uid]?.let { it to factor }
             }.toMap()
             // In-flight (uncommitted) slider drags win over persisted values,
             // so a users-list refresh mid-drag cannot snap the slider back
@@ -1064,8 +1064,8 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             val mutedClientIds = users.filter { it.uid in persistedMutedUids }.map { it.id }.toSet()
             _mutedUserIds.value = mutedClientIds
             bridge.setMutedUserIds(mutedClientIds)
-            for ((uid, db) in volumeByUid) {
-                uidToClientId[uid]?.let { bridge.setUserGainDb(it, db) }
+            for ((uid, factor) in volumeByUid) {
+                uidToClientId[uid]?.let { bridge.setUserGainFactor(it, factor) }
             }
             bridge.pruneUsers(users.map { it.id }.toSet())
         }
