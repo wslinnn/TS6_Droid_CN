@@ -39,6 +39,11 @@ class TsDroidApp : Application() {
             previous?.uncaughtException(thread, throwable)
         }
         super.onCreate()
+        // In-app log ring mirrors the debuggable gate that also hides the
+        // viewer entry — release builds skip per-line capture entirely
+        dev.tsdroid.data.AppLog.initCapture(
+            (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0,
+        )
         createNotificationChannels()
         registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: android.app.Activity) {
