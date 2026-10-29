@@ -369,6 +369,44 @@ fun ServerScreen(
                         }
                     }
 
+                    // 按住密聊：按住向上次密聊目标说话，松开立即恢复（先关麦再清
+                    // 路由）；从未选过密聊对象时置灰不可用
+                    val canHoldWhisper = WhisperManager.hasHoldWhisperTargets
+                    var whisperHolding by remember { mutableStateOf(false) }
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .then(
+                                if (canHoldWhisper) {
+                                    Modifier.pointerInput(Unit) {
+                                        detectTapGestures(
+                                            onPress = {
+                                                whisperHolding = true
+                                                viewModel.setPushToWhisper(true)
+                                                tryAwaitRelease()
+                                                viewModel.setPushToWhisper(false)
+                                                whisperHolding = false
+                                            },
+                                        )
+                                    }
+                                } else {
+                                    Modifier
+                                }
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.Forum,
+                            contentDescription = stringResource(R.string.hold_whisper),
+                            tint = when {
+                                whisperHolding || WhisperManager.isWhisperHoldActive -> Color(0xFFFFA726)
+                                canHoldWhisper -> MaterialTheme.colorScheme.onSurfaceVariant
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                            },
+                        )
+                    }
+
                     // Center button: driven by the REAL mute state — the single
                     // source of truth shared with the floating window and the
                     // notification action. PTT mode: hold to talk (release

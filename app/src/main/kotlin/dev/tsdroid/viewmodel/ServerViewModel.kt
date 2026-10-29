@@ -965,6 +965,28 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /** Mute state to restore when a whisper hold ends. */
+    private var preWhisperHoldMuted = true
+
+    /**
+     * 按住密聊：按住时以上次密聊目标集进入密聊并临时解静音，松开恢复。
+     * 顺序说明：传输层所有 native 操作（路由切换/静音/语音帧）都串行在同
+     * 一条 native 队列 FIFO 执行——即使本函数先把静音标志置 false，
+     * 语音包也必然排在 setWhisperTargets 之后出栈，句子开头不会漏进频道；
+     * 松开方向同理（关麦命令在清路由命令之前入队）。
+     */
+    fun setPushToWhisper(pressed: Boolean) {
+        val bridge = audioBridge ?: return
+        if (pressed) {
+            if (!WhisperManager.beginHoldWhisper()) return
+            preWhisperHoldMuted = bridge.isMuted.value
+            bridge.setMuted(false)
+        } else {
+            bridge.setMuted(preWhisperHoldMuted)
+            WhisperManager.endHoldWhisper()
+        }
+    }
+
     /** Same switch as the floating window / notification: flips the real mute state. */
     fun toggleMicMute() {
         audioBridge?.toggleMute()

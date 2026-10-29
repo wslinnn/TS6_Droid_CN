@@ -152,6 +152,7 @@
     <string name="whisper_stop">停止密聊</string>
     <string name="whisper_placeholder">文字密聊 %1$s…</string>
     <string name="whisper_talk_toast">%1$s 正在密语</string>
+    <string name="hold_whisper">按住密聊</string>
     <string name="overlay_offline">未连接</string>
     <string name="overlay_minimize">收起</string>
     <string name="overlay_avatar">头像</string>
