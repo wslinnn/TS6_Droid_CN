@@ -33,6 +33,14 @@ import java.net.URL
 object AnimeWallpaperState {
     val currentUrl = mutableStateOf<String?>(null)
     val customBitmap = mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
+
+    /** 网络壁纸解码后的内存位图（磨砂烘焙等需要像素级访问的功能使用）。 */
+    val wallpaperBitmap = mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
+
+    /** 当前实际绘制的壁纸（自定义图优先，其次网络壁纸），无则 null。 */
+    val activeBitmap: androidx.compose.ui.graphics.ImageBitmap?
+        get() = customBitmap.value ?: wallpaperBitmap.value
+
     val dominantColor = mutableStateOf<Color?>(null)
     private var fetched = false
     // No parent job to propagate to: an unexpected decode failure must be
@@ -102,6 +110,7 @@ object AnimeWallpaperState {
                 imgConn.disconnect()
                 if (bitmap != null) {
                     extractColorFromBitmap(bitmap)
+                    wallpaperBitmap.value = bitmap.asImageBitmap()
                     WallpaperCacheManager.saveToCache(context, finalUrl)
                     networkSuccess = true
                 }
@@ -111,6 +120,7 @@ object AnimeWallpaperState {
                 WallpaperCacheManager.getRandomCachedFile()?.let { cached ->
                     BitmapFactory.decodeFile(cached.absolutePath)?.let { bm ->
                         currentUrl.value = "file://${cached.absolutePath}"
+                        wallpaperBitmap.value = bm.asImageBitmap()
                         extractColorFromBitmap(bm)
                     }
                 }

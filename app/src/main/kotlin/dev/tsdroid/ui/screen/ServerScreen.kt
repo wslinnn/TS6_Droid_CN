@@ -102,6 +102,8 @@ import dev.tsdroid.bridge.MicMode
 import dev.tslib.ConnectionState
 import dev.tslib.User
 import dev.tsdroid.ui.component.AnimeBackground
+import dev.tsdroid.ui.component.AnimeWallpaperState
+import dev.tsdroid.ui.component.frostedBackdrop
 import dev.tsdroid.ui.component.ChannelTree
 import dev.tsdroid.ui.component.ChatView
 import dev.tsdroid.ui.component.FileManagerDialog
@@ -340,6 +342,19 @@ fun ServerScreen(
                         .fillMaxWidth()
                         .clip(MaterialTheme.shapes.large)
                         .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+                        // 磨砂底栏（Tab Bar）试点：壁纸开启时在既有半透明底之上
+                        // 叠烘焙模糊层 + 乳白罩层 + 发丝描边；关掉 = 原样
+                        .then(
+                            if (animeBackground) {
+                                Modifier.frostedBackdrop(
+                                    wallpaper = AnimeWallpaperState.activeBitmap,
+                                    shape = MaterialTheme.shapes.large,
+                                    fallbackColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                                )
+                            } else {
+                                Modifier
+                            }
+                        )
                         .padding(vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically,
