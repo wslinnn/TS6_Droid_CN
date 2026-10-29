@@ -153,7 +153,6 @@
     <string name="whisper_stop">Stop whisper</string>
     <string name="whisper_placeholder">Whisper to %1$s…</string>
     <string name="whisper_talk_toast">%1$s is whispering to you</string>
-    <string name="hold_whisper">Hold to whisper</string>
     <string name="overlay_offline">Offline</string>
     <string name="overlay_minimize">Minimize</string>
     <string name="overlay_avatar">Avatar</string>

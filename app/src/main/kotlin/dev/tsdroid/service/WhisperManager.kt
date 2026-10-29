@@ -68,24 +68,6 @@ object WhisperManager {
     private val _whisperTargetNames = mutableListOf<String>()
     val whisperTargetNames: List<String> get() = _whisperTargetNames.toList()
 
-    /**
-     * 上一次密聊的目标集（键+名），退出密聊也保留，供「按住密聊」复用——
-     * 免去每次先选人再按住的两步操作。仅在 reset()（断开）时清空。
-     */
-    private var lastTargetKeys: List<String> = emptyList()
-    private var lastTargetNames: List<String> = emptyList()
-
-    /** 是否有可复用的密聊目标（供按住密聊键置灰判断）。 */
-    val hasHoldWhisperTargets: Boolean get() = lastTargetKeys.isNotEmpty() || isWhisperActive
-
-    /** 按住密聊开始时，按住前是否本来就处于密聊（结束时据此恢复）。 */
-    private var holdStartedActive = false
-
-    /** 是否有按住密聊会话在进行（供 UI 显色）。 */
-    @JvmStatic
-    var isWhisperHoldActive: Boolean by mutableStateOf(false)
-        private set
-
     // ── 初始化 ──────────────────────────────────────────────
 
     /**
@@ -120,10 +102,6 @@ object WhisperManager {
         _whisperTargetNames.clear()
         isWhisperActive = false
         lastAppliedClids = IntArray(0)
-        lastTargetKeys = emptyList()
-        lastTargetNames = emptyList()
-        holdStartedActive = false
-        isWhisperHoldActive = false
         tsClient = null
         Log.d(TAG, "WhisperManager reset")
     }
@@ -172,7 +150,6 @@ object WhisperManager {
         _whisperTargets.add(targetKey)
         _whisperTargetNames.add(targetUser?.nickname ?: targetKey)
         isWhisperActive = true
-        rememberTargetsForHold()
         applyVoiceTargets()
 
         Log.d(TAG, "Whisper target added: ${targetUser?.nickname ?: targetKey}")
@@ -265,57 +242,7 @@ object WhisperManager {
         if (_whisperTargets.isEmpty()) {
             isWhisperActive = false
         }
-        rememberTargetsForHold()
         applyVoiceTargets()
-    }
-
-    /** 目标集快照，供按住密聊复用。 */
-    private fun rememberTargetsForHold() {
-        if (_whisperTargets.isNotEmpty()) {
-            lastTargetKeys = _whisperTargets.toList()
-            lastTargetNames = _whisperTargetNames.toList()
-        }
-    }
-
-    /**
-     * 按住密聊开始：以上次密聊目标集进入密聊。返回 false 表示没有可复用的
-     * 目标（从未选过人），调用方不应开麦。
-     *
-     * 与手动 toggle 模式互不打架：若按住前已处于密聊，本次按住直接沿用当前
-     * 目标，结束时无需恢复。
-     */
-    fun beginHoldWhisper(): Boolean {
-        if (isWhisperHoldActive) return true // 事件重放（多指/重复按下）
-        if (!isWhisperActive && lastTargetKeys.isEmpty()) {
-            Log.i(TAG, "Hold whisper ignored: no previous whisper targets")
-            return false
-        }
-        holdStartedActive = isWhisperActive
-        if (!holdStartedActive) {
-            _whisperTargets.clear()
-            _whisperTargets.addAll(lastTargetKeys)
-            _whisperTargetNames.clear()
-            _whisperTargetNames.addAll(lastTargetNames)
-            isWhisperActive = true
-            applyVoiceTargets()
-        }
-        isWhisperHoldActive = true
-        Log.d(TAG, "Hold whisper started (targets=${whisperTargetNames})")
-        return true
-    }
-
-    /**
-     * 按住密聊结束：若按住前不在密聊，退出密聊恢复频道讲话。
-     */
-    fun endHoldWhisper() {
-        if (!isWhisperHoldActive) return
-        isWhisperHoldActive = false
-        // 按住前不在密聊 → 本次是临时会话，退出恢复频道讲话；
-        // 按住前已在密聊 → 目标集未动过，无需任何下发
-        if (!holdStartedActive) {
-            stopWhisper()
-        }
-        Log.d(TAG, "Hold whisper ended")
     }
 
     /**

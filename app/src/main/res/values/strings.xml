@@ -153,7 +153,6 @@
     <string name="whisper_stop">Arrêter le chuchotement</string>
     <string name="whisper_placeholder">Chuchoter à %1$s…</string>
     <string name="whisper_talk_toast">%1$s vous chuchote</string>
-    <string name="hold_whisper">Maintenir pour chuchoter</string>
     <string name="overlay_offline">Hors ligne</string>
     <string name="overlay_minimize">Réduire</string>
     <string name="overlay_avatar">Avatar</string>
