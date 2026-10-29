@@ -617,14 +617,18 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
     }
 
     private fun cleanupFailedConnection() {
-        releaseVoiceLocks()
-        hideFloatingWindow()
+        // Keep the foreground notification, voice locks and floating window:
+        // this path also runs between auto-reconnect attempts, and demoting
+        // the service to background here would get it killed within seconds
+        // on aggressive ROMs — silently ending the retry loop. Captured audio
+        // stops (nothing transmits while disconnected) and resumes on the
+        // next successful connect. The full teardown is prepareToStop()'s
+        // job, on intentional disconnect or exhausted attempts.
         audioBridge.stopCapture()
-        WhisperManager.reset()
         isStopping = false
         restartRequestedWhileStopping = false
         instance = this
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        updateNotification()
     }
 
     private fun finishStopOrRestart(stopStartId: Int) {

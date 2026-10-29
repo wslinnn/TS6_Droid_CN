@@ -31,6 +31,7 @@ import dev.tsdroid.data.BookmarkStore
 import dev.tsdroid.data.MessageStore
 import dev.tsdroid.data.SettingsStore
 import dev.tsdroid.data.UserAudioStore
+import dev.tsdroid.service.ReconnectBackoff
 import dev.tsdroid.service.TsConnectionService
 import dev.tsdroid.service.WhisperManager
 import dev.tslib.Channel
@@ -82,9 +83,11 @@ sealed class DownloadState {
 class ServerViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private const val TAG = "ServerViewModel"
-        private const val AUTO_RECONNECT_ATTEMPTS = 5
-        private const val AUTO_RECONNECT_BASE_DELAY_MS = 2000L
         private const val PENDING_ECHO_WINDOW_MS = 5000L
+
+        /** How long the post-reconnect channel rejoin waits for the channel list. */
+        private const val REJOIN_CHANNEL_TIMEOUT_MS = 8_000L
+        private const val REJOIN_CHANNEL_POLL_MS = 400L
     }
 
     /**
@@ -1464,9 +1467,11 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Auto-reconnect after an unexpected disconnect with linear backoff.
-     * While retrying, the session stays alive for the UI; only a manual
-     * disconnect or exhausted attempts close it.
+     * Auto-reconnect after an unexpected disconnect with capped exponential
+     * backoff. While retrying, the session stays alive for the UI; only a
+     * manual disconnect or exhausted attempts close it. On success the
+     * pre-drop channel is rejoined (best effort — a password-protected
+     * channel surfaces the server's move error instead).
      */
     private fun tryAutoReconnect(service: TsConnectionService) {
         if (reconnectJob?.isActive == true) return
@@ -1474,20 +1479,53 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             _sessionClosed.value = true
             return
         }
+        // Connection-level state to replay on the new connection. Snapshot
+        // the channel now: once we are disconnected the user list is gone.
+        val myId = tsClient?.clientId
+        val prevChannelId = myId?.let { id -> tsClient?.users?.value?.find { it.id == id }?.channelId }
         reconnectJob = viewModelScope.launch {
             Log.i(TAG, "Connection lost; auto reconnect enabled")
             var lastFailure: Throwable? = null
-            for (attempt in 1..AUTO_RECONNECT_ATTEMPTS) {
-                delay(AUTO_RECONNECT_BASE_DELAY_MS * attempt)
+            for (attempt in 1..ReconnectBackoff.MAX_ATTEMPTS) {
+                delay(ReconnectBackoff.delayBeforeAttempt(attempt))
                 if (service.isShuttingDown || _connectionState.value != ConnectionState.DISCONNECTED) return@launch
-                Log.i(TAG, "Auto reconnect attempt $attempt/$AUTO_RECONNECT_ATTEMPTS")
+                Log.i(TAG, "Auto reconnect attempt $attempt/${ReconnectBackoff.MAX_ATTEMPTS}")
                 lastFailure = service.reconnect()
-                if (lastFailure == null) return@launch
+                if (lastFailure == null) {
+                    rejoinChannelAfterReconnect(prevChannelId)
+                    return@launch
+                }
                 Log.w(TAG, "Auto reconnect attempt $attempt failed", lastFailure)
             }
             Log.w(TAG, "Auto reconnect gave up; closing session")
             _sessionClosed.value = true
             service.disconnect()
+        }
+    }
+
+    /**
+     * Move back to the pre-drop channel once the new connection has synced
+     * its channel list. Bounded wait: the rejoin is a convenience, not a
+     * precondition — on timeout we stay in the default channel.
+     */
+    private fun rejoinChannelAfterReconnect(prevChannelId: Long?) {
+        val target = prevChannelId ?: return
+        viewModelScope.launch {
+            val deadline = System.currentTimeMillis() + REJOIN_CHANNEL_TIMEOUT_MS
+            while (System.currentTimeMillis() < deadline) {
+                val client = tsClient ?: return@launch
+                val channelsReady = client.channels.value.isNotEmpty()
+                val me = client.clientId?.let { id -> client.users.value.find { it.id == id } }
+                if (channelsReady && me != null) {
+                    if (me.channelId != target) {
+                        Log.i(TAG, "Rejoining pre-drop channel $target")
+                        client.moveToChannel(target, null)
+                    }
+                    return@launch
+                }
+                delay(REJOIN_CHANNEL_POLL_MS)
+            }
+            Log.w(TAG, "Channel list never synced within ${REJOIN_CHANNEL_TIMEOUT_MS}ms; staying in default channel")
         }
     }
 

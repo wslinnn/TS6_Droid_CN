@@ -6,6 +6,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.tsdroid.bridge.TsClient
 import dev.tslib.User
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * 密聊 (Whisper) 单例状态管理器。
@@ -38,6 +43,13 @@ object WhisperManager {
 
     private var tsClient: TsClient? = null
 
+    /** Replays the target set onto the current connection's user list. */
+    private val managerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var usersJob: Job? = null
+
+    /** Last target set pushed to the native layer; re-sends only on change. */
+    private var lastAppliedClids: IntArray = IntArray(0)
+
     // ── 响应式状态 ──────────────────────────────────────────
 
     /** 是否处于密聊模式 */
@@ -61,9 +73,19 @@ object WhisperManager {
     /**
      * 初始化 WhiperManager。
      * 必须在连接建立后、UI 显示前调用。
+     *
+     * 连接级状态重放：掉线重连会新建原生连接，服务端对密聊目标一无所知。
+     * 目标键（UID）在重连间保持不变，这里监听新连接的用户列表，一就绪就把
+     * 目标集重新下发——晚加入用户列表的对端也能在下一帧语音前被覆盖到。
      */
     fun init(client: TsClient) {
         tsClient = client
+        usersJob?.cancel()
+        usersJob = managerScope.launch {
+            client.users.collect {
+                if (isWhisperActive) applyVoiceTargets()
+            }
+        }
         Log.i(TAG, "WhisperManager initialized")
     }
 
@@ -71,9 +93,12 @@ object WhisperManager {
      * 断开连接时重置状态。
      */
     fun reset() {
+        usersJob?.cancel()
+        usersJob = null
         _whisperTargets.clear()
         _whisperTargetNames.clear()
         isWhisperActive = false
+        lastAppliedClids = IntArray(0)
         tsClient = null
         Log.d(TAG, "WhisperManager reset")
     }
@@ -169,10 +194,10 @@ object WhisperManager {
         val client = tsClient ?: return
         if (!isWhisperActive || _whisperTargets.isEmpty()) return
 
-        // 向所有密聊目标发送私信
+        // 向所有密聊目标发送私信；退化 clid 键只在当前用户列表能解析到，
+        // 绝不按字面值跨连接使用（重连后同 clid 可能是另一个人）
         for (targetKey in _whisperTargets) {
             val clid = client.users.value.find { keyOf(it) == targetKey }?.id
-                ?: targetKey.removePrefix("clid:").toIntOrNull()
             if (clid != null) {
                 client.sendPrivateMessage(clid, text)
             } else {
@@ -222,24 +247,29 @@ object WhisperManager {
      * 空目标集 = 关闭密聊恢复频道讲话；全部目标离线时路由到 clid 0
      * （服务器虚拟客户端，密语包被服务器直接丢弃）——绝不能回落成
      * 频道广播，否则 UI 显示密聊而实际全频道都听得到。
+     *
+     * "clid:<n>" 退化键只在当前用户列表里能解析到（同连接内的离开重进）；
+     * 绝不按字面值跨连接使用——重连后同一个 clid 可能是另一个人。
+     * 与上次下发相同的目标集直接跳过：用户列表每次变动都会进来。
      */
     private fun applyVoiceTargets() {
         val client = tsClient ?: return
-        if (_whisperTargets.isEmpty()) {
-            client.setWhisperTargets(IntArray(0), LongArray(0))
-            Log.d(TAG, "Voice whisper off, back to channel talk")
-            return
+        val clids = if (_whisperTargets.isEmpty()) {
+            IntArray(0)
+        } else {
+            val resolved = _whisperTargets.mapNotNull { key ->
+                client.users.value.find { keyOf(it) == key }?.id
+            }.toIntArray()
+            if (resolved.isEmpty()) {
+                Log.w(TAG, "All whisper targets offline; dropping voice (clid 0 sentinel) instead of channel broadcast")
+                intArrayOf(0)
+            } else {
+                resolved
+            }
         }
-        val clids = _whisperTargets.mapNotNull { key ->
-            client.users.value.find { keyOf(it) == key }?.id
-                ?: key.removePrefix("clid:").toIntOrNull()
-        }
-        if (clids.isEmpty()) {
-            Log.w(TAG, "All whisper targets offline; dropping voice (clid 0 sentinel) instead of channel broadcast")
-            client.setWhisperTargets(intArrayOf(0), LongArray(0))
-            return
-        }
-        client.setWhisperTargets(clids.toIntArray(), LongArray(0))
-        Log.d(TAG, "Voice whisper targets applied: $clids")
+        if (clids.contentEquals(lastAppliedClids)) return
+        lastAppliedClids = clids
+        client.setWhisperTargets(clids, LongArray(0))
+        Log.d(TAG, "Voice whisper targets applied: ${clids.toList()}")
     }
 }
