@@ -84,22 +84,25 @@ jobs:
           sha256sum "$NAME" > "$NAME.sha256"
           echo "ASSET=$NAME" >> "$GITHUB_ENV"
 
+      # Release 名称对齐历史版本：TS6 Mobile vX.Y.0（tag 的 -Han 后缀不进名称）
+      - name: Derive release title
+        run: echo "RELEASE_TITLE=TS6 Mobile ${GITHUB_REF_NAME%-Han}" >> "$GITHUB_ENV"
+
       - name: Assemble release body
         run: |
           BODY="$RUNNER_TEMP/release-body.md"
-          {
-            echo "TS6 Mobile ${GITHUB_REF_NAME}"
-            echo
-            echo "- 正式签名安装包：TS6-Mobile-${GITHUB_REF_NAME}-release.apk（可直接覆盖更新）"
-            echo "- SHA-256 校验值见同名 .sha256 文件"
-            echo "- 本 tag 对应完整源码（GPLv3）"
-            echo
-            if [ -f "release-notes/${GITHUB_REF_NAME}.md" ]; then
-              echo "---"
+          if [ -f "release-notes/${GITHUB_REF_NAME}.md" ]; then
+            # 手写说明自成一体的完整正文（三段式，见 release-notes/README.md）
+            cat "release-notes/${GITHUB_REF_NAME}.md" > "$BODY"
+          else
+            {
+              echo "TS6 Mobile ${GITHUB_REF_NAME}"
               echo
-              cat "release-notes/${GITHUB_REF_NAME}.md"
-            fi
-          } > "$BODY"
+              echo "- 正式签名安装包：TS6-Mobile-${GITHUB_REF_NAME}-release.apk（可直接覆盖更新）"
+              echo "- SHA-256 校验值见同名 .sha256 文件"
+              echo "- 本 tag 对应完整源码（GPLv3）"
+            } > "$BODY"
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -107,6 +110,7 @@ jobs:
           files: |
             ${{ env.ASSET }}
             ${{ env.ASSET }}.sha256
+          name: ${{ env.RELEASE_TITLE }}
           body_path: ${{ runner.temp }}/release-body.md
           generate_release_notes: true
           fail_on_unmatched_files: true
