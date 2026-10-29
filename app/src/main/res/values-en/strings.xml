@@ -240,6 +240,8 @@
 
     <!-- AboutScreen -->
     <string name="about_software">About</string>
+    <string name="battery_optimization_title">Battery optimization whitelist</string>
+    <string name="app_details_title">App info &amp; permissions</string>
     <string name="about_back">← Back</string>
     <string name="about_credits_title">Credits &amp; Origins</string>
     <string name="about_credits_desc">Project lineage: TS6_Droid by flamme-demon (original) → TS6_Droid_CN by yuaxi (Simplified Chinese localization) → this repository (ongoing maintenance). Sincere thanks to the upstream authors for their outstanding contributions to the open-source voice community!</string>

@@ -105,6 +105,12 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         /** Reconnect at most once per burst of network-change callbacks. */
         private const val NETWORK_RECONNECT_DEBOUNCE_MS = 5_000L
 
+        /** Mic watchdog period while a session is up. */
+        private const val MIC_WATCHDOG_INTERVAL_MS = 30_000L
+
+        /** No successful mic read for this long ⇒ force a capture restart. */
+        private const val MIC_STALL_THRESHOLD_MS = 60_000L
+
         /** One "user is whispering" toast per burst of whisper talk. */
         private const val WHISPER_NOTIFY_DEBOUNCE_MS = 15_000L
 
@@ -217,6 +223,8 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
 
         // Load saved floating window position
         loadSavedPosition()
+
+        startMicWatchdog()
 
         // Listen for talk status and poke events; received audio bypasses
         // the event flow entirely (AudioBridge registers a native audio sink)
@@ -497,8 +505,49 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         }
     }
 
-    /** Hold CPU + high-priority wifi access for the duration of the session. */
-    private fun acquireVoiceLocks() {
+    /**
+     * Mic watchdog. Capture can die without any user-visible error: an
+     * unexpected exception ends the capture coroutine, and a recorder
+     * invalidated by the system can block forever inside a read. Every 30s
+     * while a session is up, make sure capture is running and making
+     * progress; restart it when not. The capture loop's own self-heal
+     * handles the fast path — this catches what that path cannot see.
+     */
+    private fun startMicWatchdog() {
+        serviceScope.launch {
+            while (true) {
+                delay(MIC_WATCHDOG_INTERVAL_MS)
+                if (isStopping || !tsClient.isConnected) continue
+                if (!audioBridge.isCapturing.value) {
+                    Log.w(TAG, "Mic watchdog: capture not running while connected; restarting")
+                    restartCapture("watchdog restart")
+                } else {
+                    val idleFor = SystemClock.elapsedRealtime() - audioBridge.lastCaptureProgressAt
+                    if (idleFor > MIC_STALL_THRESHOLD_MS) {
+                        Log.w(TAG, "Mic watchdog: no capture progress for ${idleFor}ms; forcing capture restart")
+                        restartCapture("watchdog stall")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun restartCapture(reason: String) {
+        serviceScope.launch {
+            try {
+                audioBridge.stopCapture()
+                audioBridge.startCapture(
+                    serviceScope,
+                    SettingsStore(applicationContext).noiseSuppression.first(),
+                )
+                Log.i(TAG, "Capture restarted ($reason)")
+            } catch (e: Exception) {
+                Log.e(TAG, "Capture restart failed ($reason)", e)
+            }
+        }
+    }
+
+    /** Hold CPU + high-priority wifi access for the duration of the session. */    private fun acquireVoiceLocks() {
         if (wakeLock == null) {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ts6mobile:voice").apply {

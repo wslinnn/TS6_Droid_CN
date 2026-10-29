@@ -13,6 +13,7 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
+import android.os.SystemClock
 import dev.tsdroid.data.AppLog as Log
 import androidx.core.content.ContextCompat
 import dev.tslib.AudioConfig
@@ -41,6 +42,12 @@ class AudioBridge(
         const val SAMPLE_RATE = 48000
         const val CODEC_OPUS_VOICE = 4
         const val CODEC_OPUS_MUSIC = 5
+
+        /** Empty reads (read()==0) in a row before the capture is rebuilt (~1s). */
+        private const val EMPTY_READ_STREAK_LIMIT = 50
+
+        /** All-zero frames in a row before the capture is rebuilt (3s ≈ digital mute). */
+        private const val ZERO_FRAME_STREAK_LIMIT = 150
 
         /**
          * Output gain stage with a soft knee: linear below half scale
@@ -126,6 +133,26 @@ class AudioBridge(
     private var audioTrack: AudioTrack? = null
     private var noiseSuppressor: NoiseSuppressor? = null
     private var acousticEchoCanceler: AcousticEchoCanceler? = null
+
+    /**
+     * Guards [audioRecord]/effect swaps between startCapture/stopCapture
+     * (caller thread) and the capture loop's self-heal rebuilds, so a
+     * rebuild finishing after stopCapture can never orphan a live recorder.
+     */
+    private val captureSwapLock = Any()
+
+    /** Whether [attachVoiceEffects] should create a NoiseSuppressor. */
+    @Volatile
+    private var captureNsEnabled = true
+
+    /**
+     * Monotonic timestamp of the last successful mic read. The service
+     * watchdog compares it against the wall clock to detect a capture loop
+     * stuck inside a blocking read.
+     */
+    @Volatile
+    var lastCaptureProgressAt: Long = 0L
+        private set
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
@@ -278,71 +305,14 @@ class AudioBridge(
             return
         }
 
-        val minBuf = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-        )
-        val record = try {
-            AudioRecord(
-                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                maxOf(minBuf, FRAME_SIZE_BYTES * 4),
-            )
-        } catch (e: Throwable) {
-            Log.e(TAG, "Failed to create AudioRecord", e)
-            return
-        }
-        if (record.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "AudioRecord is not initialized")
-            record.release()
-            return
-        }
-        try {
-            record.startRecording()
-        } catch (e: Throwable) {
-            Log.e(TAG, "Failed to start microphone capture", e)
-            record.release()
-            return
-        }
+        val record = createAudioRecord() ?: return
         audioRecord = record
         _isCapturing.value = true
         captureScope = scope
+        lastCaptureProgressAt = SystemClock.elapsedRealtime()
         requestAudioFocus()
-        noiseSuppressor?.release()
-        noiseSuppressor = null
-        if (noiseSuppressionEnabled && NoiseSuppressor.isAvailable()) {
-            try {
-                NoiseSuppressor.create(record.audioSessionId)?.also {
-                    noiseSuppressor = it
-                    Log.i(TAG, "NoiseSuppressor enabled (session=${record.audioSessionId})")
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to create NoiseSuppressor", e)
-            }
-        } else {
-            Log.i(TAG, "NoiseSuppressor skipped: enabled=$noiseSuppressionEnabled, available=${NoiseSuppressor.isAvailable()}")
-        }
-        // Echo cancellation is independent of the noise-suppression toggle:
-        // without it, speaker playback bleeds into the mic and remote users
-        // hear themselves. VOICE_COMMUNICATION implies AEC on most devices,
-        // but that is not guaranteed everywhere — attach it when offered.
-        acousticEchoCanceler?.release()
-        acousticEchoCanceler = null
-        if (AcousticEchoCanceler.isAvailable()) {
-            try {
-                AcousticEchoCanceler.create(record.audioSessionId)?.also {
-                    acousticEchoCanceler = it
-                    Log.i(TAG, "AcousticEchoCanceler enabled (session=${record.audioSessionId})")
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to create AcousticEchoCanceler", e)
-            }
-        } else {
-            Log.i(TAG, "AcousticEchoCanceler not available on this device")
-        }
+        captureNsEnabled = noiseSuppressionEnabled
+        attachVoiceEffects(record)
 
         captureJob = scope.launch(Dispatchers.IO) {
             val buffer = ShortArray(FRAME_SIZE_SAMPLES)
@@ -351,16 +321,111 @@ class AudioBridge(
                 _isCapturing.value = false
                 return@launch
             }
+            var record = audioRecord ?: run {
+                Log.e(TAG, "Cannot start capture: AudioRecord missing")
+                _isCapturing.value = false
+                return@launch
+            }
+            // Self-heal bookkeeping. The capture device can die under our
+            // feet — aggressive ROMs invalidate VOICE_COMMUNICATION records
+            // in the background, device switches leave stale handles. Read
+            // errors, repeated empty reads and stretches of digital silence
+            // (all-zero PCM — a HAL-level mute fingerprint) all mean the same
+            // thing: rebuild the AudioRecord instead of transmitting silence
+            // or ending the session with nothing on screen.
+            var zeroFrameStreak = 0
+            var emptyReadStreak = 0
+            var consecutiveRebuilds = 0
+
+            // Rebuild the capture device from inside the loop. Returns the
+            // fresh record, or null when capture was stopped meanwhile or
+            // the rebuild keeps failing (then the loop ends and the service
+            // watchdog restarts capture later).
+            suspend fun rebuildOrStop(dead: AudioRecord): AudioRecord? {
+                // Release the dead handle first: stopCapture may run during
+                // the backoff below, and it must find a consistent state.
+                try {
+                    dead.stop()
+                } catch (_: Throwable) {
+                }
+                try {
+                    dead.release()
+                } catch (_: Throwable) {
+                }
+                synchronized(captureSwapLock) {
+                    noiseSuppressor?.release()
+                    noiseSuppressor = null
+                    acousticEchoCanceler?.release()
+                    acousticEchoCanceler = null
+                    if (audioRecord === dead) audioRecord = null
+                }
+                delay(rebuildBackoffMs(consecutiveRebuilds))
+                if (!_isCapturing.value || !isActive) return null
+                consecutiveRebuilds++
+                val fresh = createAudioRecord() ?: run {
+                    Log.e(TAG, "Capture rebuild failed (attempt $consecutiveRebuilds); ending capture loop")
+                    _isCapturing.value = false
+                    return null
+                }
+                synchronized(captureSwapLock) {
+                    if (!_isCapturing.value) {
+                        // stopCapture ran while we were building — don't
+                        // orphan a live recorder behind its back
+                        fresh.release()
+                        return null
+                    }
+                    attachVoiceEffects(fresh)
+                    audioRecord = fresh
+                }
+                zeroFrameStreak = 0
+                emptyReadStreak = 0
+                lastCaptureProgressAt = SystemClock.elapsedRealtime()
+                Log.i(TAG, "Capture rebuilt (attempt $consecutiveRebuilds)")
+                return fresh
+            }
+
             while (isActive && _isCapturing.value) {
                 val read = try {
                     record.read(buffer, 0, FRAME_SIZE_SAMPLES)
                 } catch (e: Throwable) {
-                    Log.e(TAG, "Microphone read failed", e)
-                    break
+                    Log.e(TAG, "Microphone read failed; attempting capture rebuild", e)
+                    record = rebuildOrStop(record) ?: break
+                    continue
                 }
                 if (read < 0) {
-                    Log.e(TAG, "Microphone read returned error $read")
-                    break
+                    Log.w(TAG, "Microphone read error $read; attempting capture rebuild")
+                    record = rebuildOrStop(record) ?: break
+                    continue
+                }
+                if (read == 0) {
+                    emptyReadStreak++
+                    if (emptyReadStreak >= EMPTY_READ_STREAK_LIMIT) {
+                        Log.w(TAG, "Microphone returned $emptyReadStreak empty reads; attempting capture rebuild")
+                        record = rebuildOrStop(record) ?: break
+                    }
+                    continue
+                }
+                emptyReadStreak = 0
+                lastCaptureProgressAt = SystemClock.elapsedRealtime()
+                if (read == FRAME_SIZE_SAMPLES) {
+                    var frameSilent = true
+                    for (s in buffer) {
+                        if (s.toInt() != 0) {
+                            frameSilent = false
+                            break
+                        }
+                    }
+                    if (frameSilent) {
+                        zeroFrameStreak++
+                        if (zeroFrameStreak >= ZERO_FRAME_STREAK_LIMIT) {
+                            Log.w(TAG, "Microphone silent for $zeroFrameStreak frames (digital mute?); attempting capture rebuild")
+                            record = rebuildOrStop(record) ?: break
+                            continue
+                        }
+                    } else {
+                        zeroFrameStreak = 0
+                        consecutiveRebuilds = 0
+                    }
                 }
                 if (read == FRAME_SIZE_SAMPLES && !_isMuted.value && micGainFactor != 0f) {
                     // Mic gain is applied before VAD and encode so "turn it up
@@ -434,13 +499,100 @@ class AudioBridge(
         captureScope = null
         vadGate.reset()
         abandonAudioFocus()
-        audioRecord?.stop()
-        audioRecord?.release()
-        audioRecord = null
+        synchronized(captureSwapLock) {
+            audioRecord?.stop()
+            audioRecord?.release()
+            audioRecord = null
+            noiseSuppressor?.release()
+            noiseSuppressor = null
+            acousticEchoCanceler?.release()
+            acousticEchoCanceler = null
+        }
+    }
+
+    /**
+     * Create and start a VOICE_COMMUNICATION recorder, or null on failure.
+     * Shared by [startCapture] and the capture loop's self-heal rebuilds.
+     */
+    @SuppressLint("MissingPermission")
+    private fun createAudioRecord(): AudioRecord? {
+        val minBuf = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+        )
+        val record = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                maxOf(minBuf, FRAME_SIZE_BYTES * 4),
+            )
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to create AudioRecord", e)
+            return null
+        }
+        if (record.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e(TAG, "AudioRecord is not initialized")
+            record.release()
+            return null
+        }
+        return try {
+            record.startRecording()
+            record
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to start microphone capture", e)
+            record.release()
+            null
+        }
+    }
+
+    /**
+     * (Re)attach the voice effects to the given recorder's audio session.
+     * Must run with [captureSwapLock] held when swapping the field alongside.
+     */
+    private fun attachVoiceEffects(record: AudioRecord) {
         noiseSuppressor?.release()
         noiseSuppressor = null
+        if (captureNsEnabled && NoiseSuppressor.isAvailable()) {
+            try {
+                NoiseSuppressor.create(record.audioSessionId)?.also {
+                    noiseSuppressor = it
+                    Log.i(TAG, "NoiseSuppressor enabled (session=${record.audioSessionId})")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to create NoiseSuppressor", e)
+            }
+        } else {
+            Log.i(TAG, "NoiseSuppressor skipped: enabled=$captureNsEnabled, available=${NoiseSuppressor.isAvailable()}")
+        }
+        // Echo cancellation is independent of the noise-suppression toggle:
+        // without it, speaker playback bleeds into the mic and remote users
+        // hear themselves. VOICE_COMMUNICATION implies AEC on most devices,
+        // but that is not guaranteed everywhere — attach it when offered.
         acousticEchoCanceler?.release()
         acousticEchoCanceler = null
+        if (AcousticEchoCanceler.isAvailable()) {
+            try {
+                AcousticEchoCanceler.create(record.audioSessionId)?.also {
+                    acousticEchoCanceler = it
+                    Log.i(TAG, "AcousticEchoCanceler enabled (session=${record.audioSessionId})")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to create AcousticEchoCanceler", e)
+            }
+        } else {
+            Log.i(TAG, "AcousticEchoCanceler not available on this device")
+        }
+    }
+
+    /** Wait before the Nth consecutive capture rebuild (2s → 30s cap). */
+    private fun rebuildBackoffMs(consecutiveRebuilds: Int): Long = when {
+        consecutiveRebuilds <= 0 -> 2_000L
+        consecutiveRebuilds == 1 -> 5_000L
+        consecutiveRebuilds == 2 -> 15_000L
+        else -> 30_000L
     }
 
     /**

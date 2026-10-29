@@ -265,6 +265,25 @@ fun SettingsPage(
                     onClick = onNavigateToAbout,
                 )
 
+                // 电池优化白名单——国产 ROM 的后台限制会冻结录音/联网，
+                // 直接表现为"对方听不到我"，加白名单是用户侧最有效的缓解
+                SettingsClickableRow(
+                    label = stringResource(R.string.battery_optimization_title),
+                    onClick = {
+                        try {
+                            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        } catch (_: Exception) {
+                            openAppDetails(context)
+                        }
+                    },
+                )
+
+                // 应用详情——权限管理与厂商"自启动"管理的跳板
+                SettingsClickableRow(
+                    label = stringResource(R.string.app_details_title),
+                    onClick = { openAppDetails(context) },
+                )
+
                 // 检查更新
                 UpdateCheckRow(context)
 
@@ -944,4 +963,17 @@ private fun UpdateCheckRow(context: Context) {
             }
         },
     )
+}
+
+/** 打开系统的应用详情页（权限管理；也是厂商"自启动"管理入口的跳板）。 */
+private fun openAppDetails(context: Context) {
+    try {
+        context.startActivity(
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", context.packageName, null),
+            ),
+        )
+    } catch (_: Exception) {
+    }
 }

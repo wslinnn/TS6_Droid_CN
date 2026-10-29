@@ -239,6 +239,8 @@
 
     <!-- AboutScreen -->
     <string name="about_software">关于软件</string>
+    <string name="battery_optimization_title">电池优化白名单</string>
+    <string name="app_details_title">应用信息与权限</string>
     <string name="about_back">← 返回</string>
     <string name="about_credits_title">致谢与开发源流</string>
     <string name="about_credits_desc">本项目的开发源流：flamme-demon 的 TS6_Droid（原版）→ yuaxi 的 TS6_Droid_CN（简中汉化）→ 本仓库（延续维护）。由衷感谢上游作者们对开源语音社区做出的杰出贡献！</string>

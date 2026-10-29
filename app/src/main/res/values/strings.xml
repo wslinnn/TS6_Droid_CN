@@ -240,6 +240,8 @@
 
     <!-- AboutScreen -->
     <string name="about_software">À propos</string>
+    <string name="battery_optimization_title">Liste blanche d\'optimisation de batterie</string>
+    <string name="app_details_title">Infos &amp; autorisations de l\'appli</string>
     <string name="about_back">← Retour</string>
     <string name="about_credits_title">Crédits &amp; Origines</string>
     <string name="about_credits_desc">Lignée du projet : TS6_Droid de flamme-demon (original) → TS6_Droid_CN de yuaxi (localisation en chinois simplifié) → ce dépôt (maintenance en cours). Merci sincèrement aux auteurs amont pour leurs contributions exceptionnelles à la communauté vocale open-source !</string>
