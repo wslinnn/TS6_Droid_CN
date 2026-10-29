@@ -1,7 +1,6 @@
 package dev.tsdroid.bridge
 
 import dev.tsdroid.data.AppLog as Log
-import android.os.SystemClock
 import dev.tslib.Channel
 import dev.tslib.Client
 import dev.tslib.ConnectionState
@@ -126,9 +125,6 @@ class TsClient {
         connectMutex.withLock {
             try {
                 stopEventLoop()
-                // New connection, server-side mute state starts fresh — the
-                // sync in the service re-pushes the local state if needed
-                lastSentInputMuted = null
                 val hadExistingClient = disconnectOnNativeThread()
                 // Drop chat events replayed from the previous session: a UI
                 // (re)subscriber after reconnect would otherwise re-process
@@ -526,31 +522,9 @@ class TsClient {
         }
     }
 
-    /**
-     * Server-flood-limited state commands, collectively spaced out via
-     * [CommandRateLimiter]. Messages and pokes are deliberate user actions
-     * with human pacing — they stay unthrottled.
-     */
-    private val rateLimitedCommands =
-        setOf("setInputMuted", "setWhisperTargets", "moveToChannel")
-
-    // Shared spacing timestamp for all rate-limited commands — the server
-    // counts commands, not command types. All command jobs run serially on
-    // the native dispatcher, so plain access is safe.
-    private var lastRateLimitedCommandAt = 0L
-
     private fun launchNativeCommand(name: String, block: Client.() -> Unit) {
         clientCoroutineScope.launch {
             val c = client ?: return@launch
-            if (name in rateLimitedCommands) {
-                val wait = CommandRateLimiter.delayMs(
-                    SystemClock.elapsedRealtime(),
-                    lastRateLimitedCommandAt,
-                )
-                if (wait > 0) delay(wait)
-                if (!isActive) return@launch
-                lastRateLimitedCommandAt = SystemClock.elapsedRealtime()
-            }
             try {
                 c.block()
             } catch (e: Throwable) {
@@ -637,15 +611,7 @@ class TsClient {
         }
     }
 
-    /** Last muted state pushed to the server; [connect] clears it. */
-    @Volatile
-    private var lastSentInputMuted: Boolean? = null
-
     fun setInputMuted(muted: Boolean) {
-        // Redundant states are pure quota burn: PTT bursts toggle through
-        // the same two values and the server flood-limits on command count
-        if (lastSentInputMuted == muted) return
-        lastSentInputMuted = muted
         Log.i(TAG, "setInputMuted($muted) client=${if (client != null) "present" else "NULL"}")
         launchNativeCommand("setInputMuted") {
             this.setInputMuted(muted)
