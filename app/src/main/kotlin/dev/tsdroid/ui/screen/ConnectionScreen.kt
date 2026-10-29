@@ -262,13 +262,12 @@ fun ConnectionScreen(
             bottomBar = {},
             snackbarHost = { SnackbarHost(snackbarHostState) },
         ) { padding ->
-            // 导航条不再占布局高度：Scaffold 的 padding 已含底部系统条让位，
-            // 这里只补悬浮 bar 的高度，保证列表最后一行不会被胶囊盖住
+            // 胶囊是纯悬浮层：内容区不留任何让位，列表铺满全屏正常渲染，
+            // 条目从胶囊底下穿过
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding)
-                    .padding(bottom = 92.dp),
+                    .padding(padding),
             ) {
                 // Tab 0: Home
                 Box(
@@ -383,7 +382,8 @@ fun ConnectionScreen(
                                     }
                                 }
                             }
-                            Spacer(Modifier.height(16.dp))
+                            // 滚动末尾让位：最后一张卡片滚到底时停在悬浮胶囊上方
+                            Spacer(Modifier.height(88.dp))
                         }
                     }
 

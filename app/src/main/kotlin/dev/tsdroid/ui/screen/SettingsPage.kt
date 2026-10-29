@@ -314,6 +314,9 @@ fun SettingsPage(
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f), MaterialTheme.shapes.large)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         )
+
+        // 滚动末尾让位：内容滚到底时停在悬浮胶囊上方（胶囊为纯悬浮层）
+        Spacer(Modifier.height(88.dp))
     }
 }
 
