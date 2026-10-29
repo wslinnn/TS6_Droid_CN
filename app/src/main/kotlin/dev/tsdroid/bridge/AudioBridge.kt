@@ -1006,11 +1006,23 @@ class AudioBridge(
         return bytes
     }
 
-    private fun bytesToShorts(bytes: ByteArray, out: ShortArray) {
-        val count = minOf(bytes.size / 2, out.size)
-        for (i in 0 until count) {
-            out[i] = ((bytes[i * 2].toInt() and 0xFF) or
-                    (bytes[i * 2 + 1].toInt() shl 8)).toShort()
-        }
+    private fun bytesToShorts(bytes: ByteArray, out: ShortArray) =
+        decodeBytesToShorts(bytes, out)
+}
+
+/**
+ * Little-endian PCM bytes into [out], writing exactly the decoded sample
+ * count — [out] is a decode buffer reused across frames AND across users,
+ * and the mixer sums every sample of it, so whatever the decoder did not
+ * fill must be zeroed: a short decode would otherwise fold the previous
+ * frame's (or the previous speaker's) tail into the mix.
+ * File-level and internal so the zero-fill contract is unit-testable.
+ */
+internal fun decodeBytesToShorts(bytes: ByteArray, out: ShortArray) {
+    val count = minOf(bytes.size / 2, out.size)
+    for (i in 0 until count) {
+        out[i] = ((bytes[i * 2].toInt() and 0xFF) or
+                (bytes[i * 2 + 1].toInt() shl 8)).toShort()
     }
+    java.util.Arrays.fill(out, count, out.size, 0.toShort())
 }
