@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -216,6 +217,11 @@ fun ConnectionScreen(
                             wallpaper = AnimeWallpaperState.activeBitmap.takeIf { animeBackground },
                             shape = CircleShape,
                             elevation = 10.dp,
+                            paneColor = if (isSystemInDarkTheme()) {
+                                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f)
+                            } else {
+                                Color.White.copy(alpha = 0.55f)
+                            },
                             backgroundColor = MaterialTheme.colorScheme.surfaceContainerHigh
                                 .copy(alpha = 0.9f),
                             modifier = Modifier.size(52.dp),

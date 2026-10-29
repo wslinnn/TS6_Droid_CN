@@ -96,6 +96,14 @@ fun FloatingTabBar(
         )
         val contentColor = MaterialTheme.colorScheme.onSurface
 
+        // bar 底板材：半透明奶白——身后的内容（列表条目）直接透出，内容
+        // 之下才是壁纸；明确不采样壁纸（bar 不是壁纸的一部分）
+        val paneColor = if (dark) {
+            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f)
+        } else {
+            Color.White.copy(alpha = 0.55f)
+        }
+
         // 胶囊：定死底部居中——trailing 的有无不改变它的位置
         Box(
             modifier = Modifier
@@ -107,25 +115,24 @@ fun FloatingTabBar(
                 wallpaper = wallpaper,
                 shape = CircleShape,
                 elevation = 10.dp,
+                paneColor = paneColor,
                 modifier = Modifier.fillMaxSize(),
             ) {
-                if (wallpaper != null) {
-                    // 选中态白胶囊：磨砂底之上、条目之下，同材质的一块更亮玻璃
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .offset(x = pillOffset)
-                            .width(slotWidth - pillInset * 2)
-                            .height(barHeight - 12.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = if (dark) 0.22f else 0.34f))
-                            .border(
-                                width = 0.75.dp,
-                                color = MaterialTheme.colorScheme.outlineVariant,
-                                shape = CircleShape,
-                            ),
-                    )
-                }
+                // 选中态白胶囊：底板之上、条目之下，同材质的一块更亮玻璃
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .offset(x = pillOffset)
+                        .width(slotWidth - pillInset * 2)
+                        .height(barHeight - 12.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = if (dark) 0.22f else 0.34f))
+                        .border(
+                            width = 0.75.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                            shape = CircleShape,
+                        ),
+                )
 
                 Row(modifier = Modifier.fillMaxSize()) {
                     items.forEachIndexed { index, item ->
@@ -183,9 +190,14 @@ fun FloatingTabBar(
             }
         }
 
-        // 独立加号位：贴容器右下角，与胶囊互不相干
+        // 独立加号位：贴容器右下角、与胶囊同一水平线（居中于 bar 高度）
         if (trailing != null) {
-            Box(modifier = Modifier.align(Alignment.BottomEnd)) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .height(barHeight),
+                contentAlignment = Alignment.Center,
+            ) {
                 trailing()
             }
         }

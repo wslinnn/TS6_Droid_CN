@@ -249,22 +249,30 @@ private fun LayoutCoordinates.rootSizeOf(): IntSize {
  * 面板自身区域，叠加乳白可读性罩层；[decorations] 时附加内阴影与顶部高光
  * （玻璃面板的完整材质），无壁纸时画 [fallbackColor]（面板既有底色）。
  *
- * 几何优先取 [LocalWallpaperGeometry]；面板偏移 = positionInRoot − 壁纸盒原点。
+ * [paneColor] 指定时走「半透明奶白底板」路径：不采样壁纸，只画一层
+ * 半透明底色透出身后的内容（内容之下自然透出壁纸），玻璃细节照旧——
+ * 悬浮 bar 用它：bar 身后的东西应该先看到列表条目、再透出壁纸。
+ *
+ * 几何优先取 AnimeWallpaperState.activeGeometry；面板偏移 = positionInRoot
+ * − 壁纸盒原点。
  */
 fun Modifier.frostedBackdrop(
     wallpaper: ImageBitmap?,
     shape: Shape,
     fallbackColor: Color = Color.Unspecified,
     decorations: Boolean = false,
+    paneColor: Color? = null,
 ): Modifier = composed {
     val dark = isSystemInDarkTheme()
+    // 奶白底板路径不采样壁纸：跳过烘焙
+    val sampledSource = if (paneColor != null) null else wallpaper
     val geo = AnimeWallpaperState.activeGeometry
 
     // 面板在壁纸空间中的偏移：只在绘制阶段读取，滚动每帧变化只重绘不重组
     var paneLeft by remember { mutableIntStateOf(0) }
     var paneTop by remember { mutableIntStateOf(0) }
     var boxSize by remember { mutableStateOf(geo?.size ?: IntSize.Zero) }
-    val frosted = rememberFrostedWallpaper(wallpaper, boxSize)
+    val frosted = rememberFrostedWallpaper(sampledSource, boxSize)
 
     val veil = if (dark) Color.White.copy(alpha = 0.30f) else Color.White.copy(alpha = 0.46f)
     val topHighlight = if (dark) 0.24f else 0.12f
@@ -282,6 +290,25 @@ fun Modifier.frostedBackdrop(
         val image = frosted?.image
         val box = boxSize
         when {
+            paneColor != null -> {
+                // 半透明奶白底板：身后的内容（列表条目）直接透出，内容之下
+                // 是壁纸——分层语义「先列表、下层壁纸」，不采样壁纸本身
+                drawRect(color = paneColor)
+                if (decorations) {
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            0.62f to Color.Transparent,
+                            1f to Color.Black.copy(alpha = insetShadow),
+                        ),
+                    )
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            0f to Color.White.copy(alpha = topHighlight),
+                            0.16f to Color.Transparent,
+                        ),
+                    )
+                }
+            }
             image != null && box.width > 0 && box.height > 0 -> {
                 clipRect(left = 0f, top = 0f, right = size.width, bottom = size.height) {
                     translate(left = -paneLeft.toFloat(), top = -paneTop.toFloat()) {
@@ -329,9 +356,9 @@ fun Modifier.frostedBackdrop(
         drawContent()
     }
 
-    // 发丝描边只在磨砂真正生效（壁纸可用）时加上；回退态维持面板原样。
+    // 发丝描边只在磨砂/奶白底板生效时加上；回退态维持面板原样。
     // border 在 frostedBackdrop 之后：绘制时位于磨砂层之上、子内容之下
-    if (wallpaper != null) {
+    if (wallpaper != null || paneColor != null) {
         lineBase.border(0.75.dp, Color.Black.copy(alpha = 0.10f), shape)
     } else {
         lineBase
@@ -340,7 +367,9 @@ fun Modifier.frostedBackdrop(
 
 /**
  * 玻璃面板（完整材质）：投影抬升浮出内容 + 剪裁 + 磨砂底 + 内阴影/高光 +
- * 发丝描边。壁纸关闭时回退为 [backgroundColor] 的实底面板，仍读作一个表面。
+ * 发丝描边。缺省从壁纸采样磨砂；[paneColor] 指定时改为「半透明奶白底板」
+ * ——不采样壁纸，身后的内容先透过来、内容之下才是壁纸（悬浮 bar 语义）。
+ * 无壁纸也无奶白时回退为 [backgroundColor] 的实底面板，仍读作一个表面。
  *
  * 内容色不做改写：子项按各自既有配色绘制（如需自适应亮度由调用方处理）。
  */
@@ -351,6 +380,7 @@ fun GlassSurface(
     modifier: Modifier = Modifier,
     elevation: Dp = 10.dp,
     backgroundColor: Color = MaterialTheme.colorScheme.surfaceContainer,
+    paneColor: Color? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val dark = isSystemInDarkTheme()
@@ -383,6 +413,7 @@ fun GlassSurface(
                 shape = shape,
                 fallbackColor = backgroundColor,
                 decorations = true,
+                paneColor = paneColor,
             )
             .border(0.75.dp, hairline, shape),
     ) {
