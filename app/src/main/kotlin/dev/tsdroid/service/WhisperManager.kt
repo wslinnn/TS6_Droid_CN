@@ -80,6 +80,9 @@ object WhisperManager {
      */
     fun init(client: TsClient) {
         tsClient = client
+        // 新连接对密聊目标一无所知：脏检查的基线必须清零，否则重连后
+        // 解析出与旧连接相同的目标集会被跳过，语音泄漏成频道广播
+        lastAppliedClids = IntArray(0)
         usersJob?.cancel()
         usersJob = managerScope.launch {
             client.users.collect {
