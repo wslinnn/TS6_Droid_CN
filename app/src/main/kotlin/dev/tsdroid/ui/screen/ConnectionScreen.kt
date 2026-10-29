@@ -7,18 +7,22 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -38,13 +42,10 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -78,11 +79,18 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.tsdroid.han.R
 import dev.tslib.ConnectionState
 import dev.tsdroid.ui.component.AnimeBackground
+import dev.tsdroid.ui.component.AnimeWallpaperState
 import dev.tsdroid.ui.component.ChannelTree
+import dev.tsdroid.ui.component.FloatingTabBar
+import dev.tsdroid.ui.component.FloatingTabItem
+import dev.tsdroid.ui.component.frostedBackdrop
 import dev.tsdroid.viewmodel.ConnectionViewModel
 import kotlinx.coroutines.launch
 
@@ -178,6 +186,44 @@ fun ConnectionScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         AnimeBackground(enabled = animeBackground)
 
+        // 悬浮胶囊 Tab Bar：覆盖在内容之上、不占用 Scaffold bottomBar 高度，
+        // 内容区保留整屏（列表滚到胶囊底下，最后一行靠内容自身底边距让位）
+        FloatingTabBar(
+            items = listOf(
+                FloatingTabItem(Icons.Default.Home, stringResource(R.string.tab_home)),
+                FloatingTabItem(Icons.Default.Settings, stringResource(R.string.tab_settings)),
+            ),
+            selectedIndex = selectedTab,
+            onSelect = { index -> selectedTab = index },
+            wallpaper = AnimeWallpaperState.activeBitmap.takeIf { animeBackground },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .zIndex(1f),
+            trailing = {
+                // 独立"+"圆钮：唤起已有的添加服务器面板（仅主页页签显示）
+                if (selectedTab == 0) {
+                    Box(
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(CircleShape)
+                            .frostedBackdrop(
+                                wallpaper = AnimeWallpaperState.activeBitmap.takeIf { animeBackground },
+                                shape = CircleShape,
+                                fallbackColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.9f),
+                            )
+                            .clickable { showBottomSheet = true },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = stringResource(R.string.add_server),
+                            tint = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            },
+        )
+
         Scaffold(
             containerColor = Color.Transparent,
             topBar = {
@@ -194,32 +240,18 @@ fun ConnectionScreen(
                 ),
                 )
             },
-            bottomBar = {
-                NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.6f)) {
-                    NavigationBarItem(
-                        selected = selectedTab == 0,
-                        onClick = { selectedTab = 0 },
-                        icon = { Icon(Icons.Default.Home, contentDescription = null) },
-                        label = { Text(stringResource(R.string.tab_home)) },
-                    )
-                    NavigationBarItem(
-                        selected = selectedTab == 1,
-                        onClick = { selectedTab = 1 },
-                        icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                        label = { Text(stringResource(R.string.tab_settings)) },
-                    )
-                }
-            },
+            bottomBar = {},
             snackbarHost = { SnackbarHost(snackbarHostState) },
-            floatingActionButton = {
-                if (selectedTab == 0) {
-                    FloatingActionButton(onClick = { showBottomSheet = true }) {
-                        Icon(Icons.Default.Add, contentDescription = stringResource(R.string.add_server))
-                    }
-                }
-            },
         ) { padding ->
-            Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // 导航条不再占布局高度：给内容补上系统导航条内边距 + 悬浮
+            // bar 的高度让位，保证列表最后一行不会被胶囊盖住
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(bottom = 92.dp),
+            ) {
                 // Tab 0: Home
                 Box(
                     modifier = Modifier
