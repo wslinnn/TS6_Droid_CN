@@ -1,13 +1,17 @@
 name: Android Release (Signed APK → GitHub Release)
 
-# 推送 v*.*.*-Han 格式的 tag 自动构建正式签名包并发布 Release。
+# 推送 v*.*.*-Han 格式的 tag 自动构建正式签名包并发布 Release；
+# 也支持在 Actions 页面按已有 tag 手动重跑（workflow_dispatch）。
 # 应用内「检查更新」读取的就是这里发布的 latest 正式 Release：
 #   - Release 必须是正式发布（非 draft / 非 prerelease）
 #   - 资产里有且仅有一个 .apk（UpdateChecker 取第一个以 .apk 结尾的资产）
+# Release 说明：release-notes/<tag>.md 手写文件存在时附在固定安装说明之后
+# （见 release-notes/README.md），没有则只有默认安装说明。
 on:
   push:
     tags:
       - 'v*.*.*-Han'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -80,18 +84,30 @@ jobs:
           sha256sum "$NAME" > "$NAME.sha256"
           echo "ASSET=$NAME" >> "$GITHUB_ENV"
 
+      - name: Assemble release body
+        run: |
+          BODY="$RUNNER_TEMP/release-body.md"
+          {
+            echo "TS6 Mobile ${GITHUB_REF_NAME}"
+            echo
+            echo "- 正式签名安装包：TS6-Mobile-${GITHUB_REF_NAME}-release.apk（可直接覆盖更新）"
+            echo "- SHA-256 校验值见同名 .sha256 文件"
+            echo "- 本 tag 对应完整源码（GPLv3）"
+            echo
+            if [ -f "release-notes/${GITHUB_REF_NAME}.md" ]; then
+              echo "---"
+              echo
+              cat "release-notes/${GITHUB_REF_NAME}.md"
+            fi
+          } > "$BODY"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             ${{ env.ASSET }}
             ${{ env.ASSET }}.sha256
-          body: |
-            TS6 Mobile ${{ github.ref_name }}
-
-            - 正式签名安装包：`${{ env.ASSET }}`（可直接覆盖更新）
-            - SHA-256 校验值见同名 `.sha256` 文件
-            - 本 tag 对应完整源码（GPLv3）
+          body_path: ${{ runner.temp }}/release-body.md
           generate_release_notes: true
           fail_on_unmatched_files: true
 
