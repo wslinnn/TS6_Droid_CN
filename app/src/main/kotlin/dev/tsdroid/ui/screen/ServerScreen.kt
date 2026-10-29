@@ -92,6 +92,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -103,6 +105,7 @@ import dev.tslib.ConnectionState
 import dev.tslib.User
 import dev.tsdroid.ui.component.AnimeBackground
 import dev.tsdroid.ui.component.AnimeWallpaperState
+import dev.tsdroid.ui.component.WallpaperGeometry
 import dev.tsdroid.ui.component.frostedBackdrop
 import dev.tsdroid.ui.component.ChannelTree
 import dev.tsdroid.ui.component.ChatView
@@ -286,7 +289,17 @@ fun ServerScreen(
     var pokeTargetUserId by remember { mutableStateOf<Int?>(null) }
     var showServerInfo by remember { mutableStateOf(false) }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    // 壁纸几何上报：磨砂面板据此换算自己在壁纸空间中的偏移
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { coordinates ->
+                AnimeWallpaperState.activeGeometry = WallpaperGeometry(
+                    originInRoot = coordinates.positionInRoot(),
+                    size = coordinates.size,
+                )
+            },
+    ) {
         AnimeBackground(enabled = animeBackground)
 
         Scaffold(

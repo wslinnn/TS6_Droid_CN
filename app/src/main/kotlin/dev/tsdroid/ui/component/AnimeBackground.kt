@@ -41,6 +41,9 @@ object AnimeWallpaperState {
     val activeBitmap: androidx.compose.ui.graphics.ImageBitmap?
         get() = customBitmap.value ?: wallpaperBitmap.value
 
+    /** 壁纸盒几何（磨砂面板换算偏移用），由铺壁纸的屏幕在布局时上报。 */
+    var activeGeometry by mutableStateOf<WallpaperGeometry?>(null)
+
     val dominantColor = mutableStateOf<Color?>(null)
     private var fetched = false
     // No parent job to propagate to: an unexpected decode failure must be

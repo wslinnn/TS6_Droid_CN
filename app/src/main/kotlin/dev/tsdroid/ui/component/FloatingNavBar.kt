@@ -49,11 +49,11 @@ import androidx.compose.ui.unit.dp
  * 底部悬浮胶囊 Tab Bar（iOS 风格，参考上游终版实现）：
  *
  * 覆盖在内容之上、不占布局高度——内容由调用方负责补足底边距让最后一行
- * 可达。选中态白胶囊用弹簧动画在条目之间滑动；材质走 [frostedBackdrop]
- * （壁纸烘焙模糊副本全局共享），壁纸关闭时面板画回退色保持可读。
+ * 可达。选中态白胶囊用弹簧动画在条目之间滑动；材质走 [GlassSurface]
+ * （投影抬升 + 磨砂底 + 内阴影/高光/发丝），壁纸关闭时回退为实底胶囊。
  *
- * [trailing] 渲染在胶囊右侧的独立小圆钮位（如「添加服务器」），null 或
- * 不渲染时胶囊单独居中。
+ * 「胶囊」永远锚定容器底部居中，「trailing」（如独立的加号圆钮）单独锚定
+ * 容器右下角——两者互为兄弟层，trailing 的出现/消失不会移动胶囊。
  */
 data class FloatingTabItem(
     val icon: ImageVector,
@@ -81,7 +81,6 @@ fun FloatingTabBar(
             .fillMaxWidth()
             .navigationBarsPadding()
             .padding(start = horizontalMargin, end = horizontalMargin, bottom = 12.dp),
-        contentAlignment = Alignment.BottomCenter,
     ) {
         // 拥抱条目宽度，但不超过可用宽度：条目增多时槽位收缩不被裁剪
         val capsuleWidth = minOf(itemWidth * items.size, maxWidth)
@@ -97,17 +96,18 @@ fun FloatingTabBar(
         )
         val contentColor = MaterialTheme.colorScheme.onSurface
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .width(capsuleWidth)
-                    .height(barHeight)
-                    .clip(CircleShape)
-                    .frostedBackdrop(
-                        wallpaper = wallpaper,
-                        shape = CircleShape,
-                        fallbackColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.9f),
-                    ),
+        // 胶囊：定死底部居中——trailing 的有无不改变它的位置
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .width(capsuleWidth)
+                .height(barHeight),
+        ) {
+            GlassSurface(
+                wallpaper = wallpaper,
+                shape = CircleShape,
+                elevation = 10.dp,
+                modifier = Modifier.fillMaxSize(),
             ) {
                 if (wallpaper != null) {
                     // 选中态白胶囊：磨砂底之上、条目之下，同材质的一块更亮玻璃
@@ -181,12 +181,12 @@ fun FloatingTabBar(
                     }
                 }
             }
+        }
 
-            if (trailing != null) {
-                Spacer(Modifier.width(gap))
-                Box(contentAlignment = Alignment.Center) {
-                    trailing()
-                }
+        // 独立加号位：贴容器右下角，与胶囊互不相干
+        if (trailing != null) {
+            Box(modifier = Modifier.align(Alignment.BottomEnd)) {
+                trailing()
             }
         }
     }

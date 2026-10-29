@@ -13,16 +13,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -80,7 +77,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.tsdroid.han.R
@@ -90,7 +88,8 @@ import dev.tsdroid.ui.component.AnimeWallpaperState
 import dev.tsdroid.ui.component.ChannelTree
 import dev.tsdroid.ui.component.FloatingTabBar
 import dev.tsdroid.ui.component.FloatingTabItem
-import dev.tsdroid.ui.component.frostedBackdrop
+import dev.tsdroid.ui.component.GlassSurface
+import dev.tsdroid.ui.component.WallpaperGeometry
 import dev.tsdroid.viewmodel.ConnectionViewModel
 import kotlinx.coroutines.launch
 
@@ -183,48 +182,62 @@ fun ConnectionScreen(
         viewModel.recheckOverlayAndContinue(onConnected)
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { coordinates ->
+                // 壁纸几何上报：磨砂面板据此换算自己在壁纸空间中的偏移
+                // （显式坐标假设，不再依赖「壁纸 == 组合根」的巧合）
+                AnimeWallpaperState.activeGeometry = WallpaperGeometry(
+                    originInRoot = coordinates.positionInRoot(),
+                    size = coordinates.size,
+                )
+            },
+    ) {
         AnimeBackground(enabled = animeBackground)
 
-        // 悬浮胶囊 Tab Bar：覆盖在内容之上、不占用 Scaffold bottomBar 高度，
-        // 内容区保留整屏（列表滚到胶囊底下，最后一行靠内容自身底边距让位）
-        FloatingTabBar(
-            items = listOf(
-                FloatingTabItem(Icons.Default.Home, stringResource(R.string.tab_home)),
-                FloatingTabItem(Icons.Default.Settings, stringResource(R.string.tab_settings)),
-            ),
-            selectedIndex = selectedTab,
-            onSelect = { index -> selectedTab = index },
-            wallpaper = AnimeWallpaperState.activeBitmap.takeIf { animeBackground },
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .zIndex(1f),
-            trailing = {
-                // 独立"+"圆钮：唤起已有的添加服务器面板（仅主页页签显示）
-                if (selectedTab == 0) {
-                    Box(
-                        modifier = Modifier
-                            .size(52.dp)
-                            .clip(CircleShape)
-                            .frostedBackdrop(
-                                wallpaper = AnimeWallpaperState.activeBitmap.takeIf { animeBackground },
-                                shape = CircleShape,
-                                fallbackColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.9f),
-                            )
-                            .clickable { showBottomSheet = true },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Default.Add,
-                            contentDescription = stringResource(R.string.add_server),
-                            tint = MaterialTheme.colorScheme.onSurface,
-                        )
+            // 悬浮胶囊 Tab Bar：覆盖在内容之上、不占用 Scaffold bottomBar 高度，
+            // 内容区保留整屏（列表滚到胶囊底下，最后一行靠内容自身底边距让位）
+            FloatingTabBar(
+                items = listOf(
+                    FloatingTabItem(Icons.Default.Home, stringResource(R.string.tab_home)),
+                    FloatingTabItem(Icons.Default.Settings, stringResource(R.string.tab_settings)),
+                ),
+                selectedIndex = selectedTab,
+                onSelect = { index -> selectedTab = index },
+                wallpaper = AnimeWallpaperState.activeBitmap.takeIf { animeBackground },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .zIndex(2f),
+                trailing = {
+                    // 独立"+"圆钮：唤起已有的添加服务器面板（仅主页页签显示）
+                    if (selectedTab == 0) {
+                        GlassSurface(
+                            wallpaper = AnimeWallpaperState.activeBitmap.takeIf { animeBackground },
+                            shape = CircleShape,
+                            elevation = 10.dp,
+                            backgroundColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                .copy(alpha = 0.9f),
+                            modifier = Modifier.size(52.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clickable { showBottomSheet = true },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = stringResource(R.string.add_server),
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
                     }
-                }
-            },
-        )
+                },
+            )
 
-        Scaffold(
+            Scaffold(
             containerColor = Color.Transparent,
             topBar = {
                 TopAppBar(
@@ -243,13 +256,12 @@ fun ConnectionScreen(
             bottomBar = {},
             snackbarHost = { SnackbarHost(snackbarHostState) },
         ) { padding ->
-            // 导航条不再占布局高度：给内容补上系统导航条内边距 + 悬浮
-            // bar 的高度让位，保证列表最后一行不会被胶囊盖住
+            // 导航条不再占布局高度：Scaffold 的 padding 已含底部系统条让位，
+            // 这里只补悬浮 bar 的高度，保证列表最后一行不会被胶囊盖住
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .windowInsetsPadding(WindowInsets.navigationBars)
                     .padding(bottom = 92.dp),
             ) {
                 // Tab 0: Home
