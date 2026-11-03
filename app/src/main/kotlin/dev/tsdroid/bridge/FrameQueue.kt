@@ -57,6 +57,16 @@ class FrameQueue(private val capacity: Int) {
         now - first.enqueuedAt
     }
 
+    /**
+     * Advance the sequence tracker for a packet that carries no playable
+     * audio (comfort-noise marker during open-mic silence). The marker
+     * occupies a sequence number, so the next real frame's loss inference is
+     * measured from here instead of reporting the marker as a lost frame.
+     */
+    fun skip(seq: Int) {
+        synchronized(this) { lastSeq = seq }
+    }
+
     fun clear() = synchronized(this) {
         queue.clear()
         // Whatever comes after a purge (focus gap, output mute) has no

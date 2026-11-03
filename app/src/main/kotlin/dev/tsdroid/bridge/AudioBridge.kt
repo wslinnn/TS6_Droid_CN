@@ -1041,11 +1041,19 @@ class AudioBridge(
     }
 
     fun playAudio(userId: Int, seq: Int, opusData: ByteArray) {
-        // Count short comfort-noise frames ahead of every gate so the flow
-        // shape is visible before any decode-skip behavior is decided —
-        // behavior itself is unchanged until the numbers are in.
+        // Comfort-noise marker (TS open-mic silence emits ~3-byte frames):
+        // advance the sender's sequence so the next real frame's loss
+        // inference stays correct, then stop — no decode, no queue, no PLC,
+        // no TOC stats. The speaking indicator comes from server talk-status
+        // events, never from decoded audio, so it stays dark by itself.
         if (opusData.size <= COMFORT_NOISE_FRAME_MAX_BYTES) {
             comfortNoiseFrames++
+            if (userId in mutedUserIds) return
+            if (_isOutputMuted.value) return
+            if (outputSuspendedByFocus) return
+            if (gainFactor == 0f) return
+            userQueues.getOrPut(userId) { FrameQueue(MAX_QUEUE_FRAMES) }.skip(seq)
+            return
         }
         // Duration histogram: the pipeline assumes constant 20ms frames; a
         // sender emitting other durations would be silently truncated by the

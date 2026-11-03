@@ -83,6 +83,28 @@ class FrameQueueTest {
     }
 
     @Test
+    fun `skipped marker keeps the next frame gap-free`() {
+        val q = FrameQueue(8)
+        q.offer(ByteArray(1), 10)
+        // Comfort-noise marker arrives between real frames (seq 11) and is
+        // not queued; the next real frame must not be reported as loss.
+        q.skip(11)
+        q.offer(ByteArray(1), 12)
+        assertEquals(2, q.size)
+        q.pollFirst()
+        assertEquals(0, q.pollFirst()!!.gap)
+        assertEquals(0, q.size)
+    }
+
+    @Test
+    fun `marker before the first frame still arms continuity`() {
+        val q = FrameQueue(8)
+        q.skip(500)
+        q.offer(ByteArray(1), 501)
+        assertEquals(0, q.pollFirst()!!.gap)
+    }
+
+    @Test
     fun `duplicate sequence plays with zero gap`() {
         val q = FrameQueue(8)
         q.offer(ByteArray(1), 42)
