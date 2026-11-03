@@ -97,6 +97,13 @@ class AudioBridge(
 
         /** Mic frames within this long after a playback write still count as far-active for the ERLE probe. */
         private const val FAR_ACTIVE_GRACE_MS = 100L
+
+        /**
+         * TS clients emit tiny (~3-byte) comfort-noise frames during open-mic
+         * silence — RFC 6716's minimum meaningful payload is far larger, so
+         * anything this small is a silence marker, not audio.
+         */
+        private const val COMFORT_NOISE_FRAME_MAX_BYTES = 3
     }
 
     private val audioConfig = AudioConfig()
@@ -124,6 +131,10 @@ class AudioBridge(
     private val userDiag = ConcurrentHashMap<Int, UserDiag>()
     @Volatile
     private var lastDiagFlush = System.currentTimeMillis()
+
+    /** Short-frame sightings this diagnostics window (decode-skip decision pending the count). */
+    @Volatile
+    private var comfortNoiseFrames = 0
 
     // Encoder timing ring (µs per encode call) — validates the complexity-8
     // CPU budget on real devices (frame budget is 20ms = 20000µs)
@@ -948,6 +959,12 @@ class AudioBridge(
     }
 
     fun playAudio(userId: Int, seq: Int, opusData: ByteArray) {
+        // Count short comfort-noise frames ahead of every gate so the flow
+        // shape is visible before any decode-skip behavior is decided —
+        // behavior itself is unchanged until the numbers are in.
+        if (opusData.size <= COMFORT_NOISE_FRAME_MAX_BYTES) {
+            comfortNoiseFrames++
+        }
         if (userId in mutedUserIds) return
         if (_isOutputMuted.value) return // Global output mute — discard incoming audio
         if (outputSuspendedByFocus) return // Another app holds focus — discard instead of queueing
@@ -1037,6 +1054,11 @@ class AudioBridge(
             val samples = queueDelaySamplesUs.take(qn.coerceAtMost(queueDelaySamplesUs.size)).sorted()
             val p95 = samples[(samples.size * 95 / 100).coerceIn(0, samples.size - 1)]
             Log.i(TAG, "AudioQueue 30s: n=${samples.size} p95=${p95}us (enqueue→play)")
+        }
+        val cn = comfortNoiseFrames
+        if (cn > 0) {
+            Log.i(TAG, "AudioComfort 30s: shortFrames=$cn (≤${COMFORT_NOISE_FRAME_MAX_BYTES}B, decode-skip pending)")
+            comfortNoiseFrames = 0
         }
         val echo = echoProbe.snapshotAndReset()
         if (echo.farMs > 0) {
