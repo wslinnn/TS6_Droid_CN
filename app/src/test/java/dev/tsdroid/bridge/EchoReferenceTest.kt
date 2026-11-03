@@ -12,18 +12,20 @@ class EchoReferenceTest {
     private fun ShortArray.allZero() = all { it == 0.toShort() }
 
     @Test
-    fun `alignment pads five frames then pairs the first pushed frame`() {
+    fun `first read pairs the first pushed frame with zero alignment`() {
         val ref = EchoReference()
         val out = ShortArray(960)
-        repeat(6) { i -> ref.push(frame((i + 1).toShort()), nowMs = (i + 1) * 20L) }
+        repeat(3) { i -> ref.push(frame((i + 1).toShort()), nowMs = (i + 1) * 20L) }
 
-        repeat(5) {
-            assertFalse("alignment frame $it must pad", ref.read(out))
-            assertTrue(out.allZero())
-        }
         assertTrue(ref.read(out))
-        assertEquals(1, out[0].toInt()) // oldest pushed frame
-        assertEquals(0, ref.snapshotAndReset().skipFrames)
+        assertEquals(1, out[0].toInt())
+        assertTrue(ref.read(out))
+        assertEquals(2, out[0].toInt())
+        assertTrue(ref.read(out))
+        assertEquals(3, out[0].toInt())
+        val stats = ref.snapshotAndReset()
+        assertEquals(0, stats.padFrames)
+        assertEquals(0, stats.skipFrames)
     }
 
     @Test
@@ -36,7 +38,6 @@ class EchoReferenceTest {
         // fall under the 300 ms stale bound and skip instead — by design.)
         ref.push(frame(2), nowMs = 120L)
 
-        repeat(5) { ref.read(out) } // alignment
         assertTrue(ref.read(out))
         assertEquals(1, out[0].toInt()) // frame before the gap
         repeat(4) {
@@ -48,7 +49,7 @@ class EchoReferenceTest {
         assertTrue(ref.read(out))
         assertEquals(2, out[0].toInt()) // resumed frame after 4 zero frames
         val stats = ref.snapshotAndReset()
-        assertEquals(5, stats.padFrames) // alignment only — gaps are filled, not missing
+        assertEquals(0, stats.padFrames)
         assertEquals(0, stats.skipFrames)
     }
 
@@ -59,25 +60,59 @@ class EchoReferenceTest {
         // 30 frames pushed (600 ms) with no reads: the oldest data is stale.
         repeat(30) { i -> ref.push(frame((i + 1).toShort()), nowMs = (i + 1) * 20L) }
 
-        repeat(5) { ref.read(out) } // alignment
         assertTrue(ref.read(out))
         // Skipped to the 300 ms lag bound: 14400 samples in = frame 16 (index 15)
         assertEquals(16, out[0].toInt())
         val stats = ref.snapshotAndReset()
         assertEquals(1, stats.skipFrames)
-        assertEquals(0, stats.resyncs)
     }
 
     @Test
-    fun `capture ahead of the stream re-arms alignment`() {
+    fun `idle stream reads zeros and stays wall-clock aligned on resume`() {
         val ref = EchoReference()
         val out = ShortArray(960)
         ref.push(frame(7), nowMs = 20L)
-        // Capture keeps reading with no playback: after consuming the single
-        // frame the stream can never catch up, so alignment must re-arm.
-        repeat(7) { ref.read(out) }
+        assertTrue(ref.read(out))
+        assertEquals(7, out[0].toInt())
+
+        // Playback stops: re-reading the last played frame would feed a
+        // phantom reference, so idle reads must yield zeros.
+        assertFalse(ref.read(out))
+        assertTrue(out.allZero())
+        assertFalse(ref.read(out))
+        assertTrue(out.allZero())
+
+        // Playback resumes 200 ms later. The push-side zero-fill represents
+        // the silent gap, so the consumer first reads those zeros (speaker
+        // was silent) and only then the resumed frame — wall-clock aligned,
+        // no resync needed.
+        ref.push(frame(8), nowMs = 220L)
+        repeat(7) {
+            ref.read(out)
+            assertTrue("gap frame $it must read as zeros", out.allZero())
+        }
+        assertTrue(ref.read(out))
+        assertEquals(8, out[0].toInt())
         val stats = ref.snapshotAndReset()
-        assertTrue("resyncs=${stats.resyncs}", stats.resyncs >= 1)
+        assertEquals(0, stats.resyncs)
+        assertEquals(2, stats.padFrames) // the two idle reads only
+    }
+
+    @Test
+    fun `idle beyond the zero-fill cap realigns on resume`() {
+        val ref = EchoReference()
+        val out = ShortArray(960)
+        ref.push(frame(1), nowMs = 20L)
+        assertTrue(ref.read(out))
+        // ~800 ms of idle: longer than the 500 ms zero-fill cap, so the
+        // consumer necessarily runs past everything the stream can supply.
+        repeat(40) { ref.read(out) }
+        ref.push(frame(2), nowMs = 900L)
+
+        assertTrue(ref.read(out))
+        assertEquals(2, out[0].toInt()) // realigned to the resumed frame
+        val stats = ref.snapshotAndReset()
+        assertEquals(1, stats.resyncs)
     }
 
     @Test

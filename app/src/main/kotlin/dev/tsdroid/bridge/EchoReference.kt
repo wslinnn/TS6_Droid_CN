@@ -7,18 +7,25 @@ package dev.tsdroid.bridge
  * PCM that the speaker was emitting at (roughly) that moment. Two problems
  * make this non-trivial:
  *
- * - **Latency**: the echo of a played sample reaches the mic roughly
- *   `track buffer + acoustic path` later (~100 ms on this pipeline), so the
- *   reference must lag the capture stream by [alignSamples].
+ * - **Latency window**: the adaptive filter represents echo delays in
+ *   `[alignSamples, alignSamples + tail)` only (the tail is set by the
+ *   engine). The real write→mic delay on this pipeline is roughly
+ *   `AudioTrack buffer (5–85 ms) + acoustic path (~5 ms)` ≈ 10–90 ms, so
+ *   [alignSamples] must not exceed the **smallest** plausible delay —
+ *   otherwise the direct-path echo falls before the window and cannot be
+ *   cancelled at all (measured: 40 ms delay with a 100 ms alignment left the
+ *   direct echo untouched, ~7.5 dB ERLE vs 18.5 dB at 0 ms alignment).
  * - **Idle playback**: the playback loop writes nothing while the remote side
  *   is silent. Wall-clock still advances, so [push] fills the gap with zeros
  *   (the speaker emitted silence) — otherwise the reference timeline would
  *   fall behind forever after the first talkspurt pause.
  *
  * Drift correction is deliberately bounded (拍板边界: 管线级全静态): a stale
- * reference skips forward at most to [maxLagSamples], a capture stream ahead
- * of the reference re-arms alignment, and both events are counted for the
- * 30 s diagnostics instead of silently reshaping the timeline.
+ * reference skips forward at most to [maxLagSamples]; when the capture stream
+ * outruns the reference (idle playback) the read yields zeros, and the first
+ * read after the stream advances again re-aligns to the newest frame. All
+ * events are counted for the 30 s diagnostics instead of silently reshaping
+ * the timeline.
  *
  * Threading: [push] runs on the playback thread, [read] on the capture
  * thread, [reset] on the caller thread — all synchronized (copies of one
@@ -28,7 +35,7 @@ internal class EchoReference(
     private val sampleRate: Int = AudioBridge.SAMPLE_RATE,
     private val frameSamples: Int = sampleRate / 50, // 20 ms
     private val capacitySamples: Int = sampleRate / 2, // 500 ms
-    private val alignSamples: Int = sampleRate / 10, // 100 ms static alignment
+    private val alignSamples: Int = 0, // 0 ms: window starts at the direct path
     private val maxLagSamples: Int = sampleRate * 3 / 10, // 300 ms stale bound
 ) {
     private val ring = ShortArray(capacitySamples)
@@ -38,6 +45,9 @@ internal class EchoReference(
     /** Stream index of the next sample handed to the engine; MIN = unarmed. */
     private var consumePos = Long.MIN_VALUE
     private var lastPushAtMs = 0L
+
+    /** [totalWritten] seen by the previous read — detects an idle stream. */
+    private var lastReadTotal = -1L
 
     private var padFrames = 0
     private var skipFrames = 0
@@ -50,6 +60,7 @@ internal class EchoReference(
         totalWritten = 0
         consumePos = Long.MIN_VALUE
         lastPushAtMs = 0
+        lastReadTotal = -1L
         padFrames = 0
         skipFrames = 0
         resyncs = 0
@@ -96,10 +107,19 @@ internal class EchoReference(
             out.fill(0)
             return false
         }
-        // Capture advanced past everything ever written (long silence beyond
-        // the ring, or a fresh stream): re-arm the alignment instead of
-        // staying blind forever.
-        if (consumePos >= totalWritten) {
+        if (consumePos + frameSamples > totalWritten) {
+            if (totalWritten == lastReadTotal) {
+                // Stream idle: playback loop wrote nothing, so the speaker
+                // emitted silence. Re-reading the last played frame here would
+                // feed a phantom reference; pad zeros and advance the clock.
+                out.fill(0)
+                consumePos += frameSamples
+                padFrames++
+                return false
+            }
+            // Stream advanced again (playback resumed, possibly after a gap
+            // the push-side zero-fill could not cover): re-align to the
+            // newest frame instead of staying behind forever.
             consumePos = totalWritten - alignSamples - frameSamples
             resyncs++
         }
@@ -107,6 +127,7 @@ internal class EchoReference(
             out.fill(0)
             consumePos += frameSamples
             padFrames++
+            lastReadTotal = totalWritten
             return false
         }
         // Stale reference (clock skew, producer burst): skip forward, bounded.
@@ -123,6 +144,7 @@ internal class EchoReference(
             if (idx == capacitySamples) idx = 0
         }
         consumePos += frameSamples
+        lastReadTotal = totalWritten
         return true
     }
 
