@@ -47,7 +47,13 @@ class AudioBridge(
         /** Empty reads (read()==0) in a row before the capture is rebuilt (~1s). */
         private const val EMPTY_READ_STREAK_LIMIT = 50
 
-        /** All-zero frames in a row before the capture is rebuilt (3s ≈ digital mute). */
+        /**
+         * All-zero frames in a row before sustained-silence diagnostics
+         * escalate (3s). This no longer triggers a rebuild: healthy mics
+         * never read exact zeros (noise floor), but platform NS hard-gating
+         * and dead HALs both do, and they are indistinguishable here — the
+         * service watchdog arbitrates instead (see [lastCaptureProgressAt]).
+         */
         private const val ZERO_FRAME_STREAK_LIMIT = 150
 
         /**
@@ -193,9 +199,13 @@ class AudioBridge(
     private var captureAgcEnabled = false
 
     /**
-     * Monotonic timestamp of the last successful mic read. The service
-     * watchdog compares it against the wall clock to detect a capture loop
-     * stuck inside a blocking read.
+     * Monotonic timestamp of the last **non-silent** mic data (a partial
+     * read or any full frame with a non-zero sample). The service watchdog
+     * compares it against the wall clock to detect a capture loop stuck in a
+     * blocking read — or a mic delivering only digital silence: on several
+     * ROMs the platform NS hard-gates silence to exact zeros, so all-zero
+     * frames deliberately do NOT refresh this — the watchdog arbitrates a
+     * restart if silence lasts past its threshold.
      */
     @Volatile
     var lastCaptureProgressAt: Long = 0L
@@ -394,10 +404,13 @@ class AudioBridge(
             // Self-heal bookkeeping. The capture device can die under our
             // feet — aggressive ROMs invalidate VOICE_COMMUNICATION records
             // in the background, device switches leave stale handles. Read
-            // errors, repeated empty reads and stretches of digital silence
-            // (all-zero PCM — a HAL-level mute fingerprint) all mean the same
-            // thing: rebuild the AudioRecord instead of transmitting silence
-            // or ending the session with nothing on screen.
+            // errors and repeated empty reads are hard-death fingerprints:
+            // rebuild immediately. All-zero PCM is deliberately NOT rebuilt
+            // on — healthy mics never read exact zeros, but platform NS
+            // hard-gating produces them for minutes on some ROMs, so the two
+            // are indistinguishable here and rebuilding just churned every
+            // few seconds; sustained digital silence withholds capture
+            // progress instead and the service watchdog arbitrates.
             var zeroFrameStreak = 0
             var emptyReadStreak = 0
             var consecutiveRebuilds = 0
@@ -471,7 +484,6 @@ class AudioBridge(
                     continue
                 }
                 emptyReadStreak = 0
-                lastCaptureProgressAt = SystemClock.elapsedRealtime()
                 if (read == FRAME_SIZE_SAMPLES) {
                     var frameSilent = true
                     for (s in buffer) {
@@ -481,22 +493,36 @@ class AudioBridge(
                         }
                     }
                     if (frameSilent) {
+                        // Digital silence: a healthy mic never reads exact
+                        // zeros (noise floor), but NS-gated silence and a
+                        // dead HAL both do — indistinguishable here, so no
+                        // rebuild. Progress is withheld (below) and the
+                        // service watchdog arbitrates a restart if it lasts.
                         zeroFrameStreak++
-                        if (zeroFrameStreak == ZERO_FRAME_STREAK_LIMIT / 2) {
-                            Log.w(TAG, "Microphone silent streak at $zeroFrameStreak frames (half of rebuild limit)")
-                        }
-                        if (zeroFrameStreak >= ZERO_FRAME_STREAK_LIMIT) {
-                            Log.w(TAG, "Microphone silent for $zeroFrameStreak frames (digital mute?); attempting capture rebuild")
-                            record = rebuildOrStop(record) ?: break
-                            continue
+                        when (zeroFrameStreak) {
+                            ZERO_FRAME_STREAK_LIMIT / 2 -> Log.i(
+                                TAG,
+                                "Digital silence building ($zeroFrameStreak frames) — platform NS gate? no rebuild",
+                            )
+                            ZERO_FRAME_STREAK_LIMIT -> Log.w(
+                                TAG,
+                                "Digital silence sustained ($zeroFrameStreak frames); not rebuilding — watchdog arbitrates if it persists",
+                            )
                         }
                     } else {
                         zeroFrameStreak = 0
                         consecutiveRebuilds = 0
+                        // Only non-silent data counts as capture progress:
+                        // NS-gated zeros (or a dead mic) must not keep the
+                        // watchdog satisfied forever
+                        lastCaptureProgressAt = SystemClock.elapsedRealtime()
                     }
                     // ERLE probe observes the raw mic — before gain/VAD/encode,
                     // unaffected by mute (which only gates transmission)
                     echoProbe.onMicFrame(buffer, System.currentTimeMillis() < farActiveUntil)
+                } else {
+                    // Partial read (0 < read < frame): still proves the device is alive
+                    lastCaptureProgressAt = SystemClock.elapsedRealtime()
                 }
                 if (read == FRAME_SIZE_SAMPLES && !_isMuted.value && micGainFactor != 0f) {
                     // Mic gain is applied before VAD and encode so "turn it up
