@@ -132,6 +132,12 @@ class AudioBridge(
     @Volatile
     private var encodeSampleCount = 0
 
+    /** Playback-side diagnostics, updated and flushed on the playback thread. */
+    private var trackBufPeakMs = 0L
+    private val queueDelaySamplesUs = LongArray(512)
+    private var queueDelaySampleIdx = 0
+    private var queueDelaySampleCount = 0
+
     private var audioRecord: AudioRecord? = null
     private var audioTrack: AudioTrack? = null
     private var noiseSuppressor: NoiseSuppressor? = null
@@ -418,6 +424,9 @@ class AudioBridge(
                     if (emptyReadStreak >= EMPTY_READ_STREAK_LIMIT) {
                         Log.w(TAG, "Microphone returned $emptyReadStreak empty reads; attempting capture rebuild")
                         record = rebuildOrStop(record) ?: break
+                    } else if (emptyReadStreak == EMPTY_READ_STREAK_LIMIT / 2) {
+                        // Early warning: short sessions die before the 30s flush sees anything
+                        Log.w(TAG, "Microphone empty reads at $emptyReadStreak (half of rebuild limit)")
                     }
                     continue
                 }
@@ -433,6 +442,9 @@ class AudioBridge(
                     }
                     if (frameSilent) {
                         zeroFrameStreak++
+                        if (zeroFrameStreak == ZERO_FRAME_STREAK_LIMIT / 2) {
+                            Log.w(TAG, "Microphone silent streak at $zeroFrameStreak frames (half of rebuild limit)")
+                        }
                         if (zeroFrameStreak >= ZERO_FRAME_STREAK_LIMIT) {
                             Log.w(TAG, "Microphone silent for $zeroFrameStreak frames (digital mute?); attempting capture rebuild")
                             record = rebuildOrStop(record) ?: break
@@ -832,6 +844,7 @@ class AudioBridge(
                 // sustained latency. Capacity is headroom, this is the bound.
                 val head = audioTrack?.playbackHeadPosition?.toLong() ?: 0L
                 val bufferedMs = (writtenFrames - head) * 1000 / SAMPLE_RATE
+                if (bufferedMs > trackBufPeakMs) trackBufPeakMs = bufferedMs
                 if (bufferedMs > TARGET_TRACK_BUFFER_MS) {
                     playbackWake.poll(20, java.util.concurrent.TimeUnit.MILLISECONDS)
                     continue
@@ -875,6 +888,7 @@ class AudioBridge(
                     }
                     userHungerStreak[userId] = 0
                     userLastAudioAt[userId] = now
+                    recordQueueDelayUs((now - entry.enqueuedAt) * 1000)
 
                     try {
                         if (entry.gap > 0) {
@@ -1013,6 +1027,17 @@ class AudioBridge(
             val p95 = samples[(samples.size * 95 / 100).coerceIn(0, samples.size - 1)]
             Log.i(TAG, "AudioEnc 30s: n=${samples.size} p95=${p95}us max=${samples.last()}us (budget 20000us)")
         }
+        if (trackBufPeakMs > 0) {
+            Log.i(TAG, "AudioOut 30s: trackBufPeak=${trackBufPeakMs}ms (target ${TARGET_TRACK_BUFFER_MS}ms)")
+            trackBufPeakMs = 0
+        }
+        val qn = queueDelaySampleCount
+        if (qn > 0) {
+            queueDelaySampleCount = 0
+            val samples = queueDelaySamplesUs.take(qn.coerceAtMost(queueDelaySamplesUs.size)).sorted()
+            val p95 = samples[(samples.size * 95 / 100).coerceIn(0, samples.size - 1)]
+            Log.i(TAG, "AudioQueue 30s: n=${samples.size} p95=${p95}us (enqueue→play)")
+        }
         val echo = echoProbe.snapshotAndReset()
         if (echo.farMs > 0) {
             val erleAll = echo.erleAllDb?.let { String.format("%.1f", it) } ?: "n/a"
@@ -1026,6 +1051,13 @@ class AudioBridge(
         encodeSamplesUs[encodeSampleIdx and (encodeSamplesUs.size - 1)] = us
         encodeSampleIdx++
         encodeSampleCount++
+    }
+
+    /** Record one enqueue→playback latency (µs) into the diagnostics ring. */
+    private fun recordQueueDelayUs(us: Long) {
+        queueDelaySamplesUs[queueDelaySampleIdx and (queueDelaySamplesUs.size - 1)] = us
+        queueDelaySampleIdx++
+        queueDelaySampleCount++
     }
 
     private fun shortsToBytes(shorts: ShortArray): ByteArray {
