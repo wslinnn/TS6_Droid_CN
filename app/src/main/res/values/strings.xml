@@ -89,6 +89,12 @@
     <string name="mic_mode_open">Micro ouvert</string>
     <string name="vad_threshold">Seuil de déclenchement : %1$d dB</string>
     <string name="vad_threshold_hint">Les niveaux au-dessus du seuil déclenchent la transmission. -45 dB convient à la plupart des environnements.</string>
+    <string name="agc">Gain automatique du micro</string>
+    <string name="capture_source">Source de capture</string>
+    <string name="capture_source_voice_communication">Standard</string>
+    <string name="capture_source_mic">Micro brut</string>
+    <string name="capture_source_voice_performance">Captation pure</string>
+    <string name="capture_source_hint">Prend effet à la prochaine capture (reconnexion). La captation pure ignore le traitement vocal du système — plus claire sur certains appareils.</string>
     <string name="user_uid">ID unique</string>
     <string name="user_platform">Plateforme</string>
     <string name="user_version">Version</string>

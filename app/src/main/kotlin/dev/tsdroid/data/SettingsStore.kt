@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import dev.tsdroid.bridge.CaptureSource
 import dev.tsdroid.bridge.MicMode
 import dev.tsdroid.bridge.VadGate
 import kotlinx.coroutines.flow.Flow
@@ -21,6 +22,8 @@ private val KEY_LANGUAGE = stringPreferencesKey("language")
 private val KEY_ENABLE_FLOATING_WINDOW = booleanPreferencesKey("enable_floating_window")
 private val KEY_ANIME_BACKGROUND = booleanPreferencesKey("anime_background")
 private val KEY_NOISE_SUPPRESSION = booleanPreferencesKey("noise_suppression")
+private val KEY_CAPTURE_SOURCE = stringPreferencesKey("capture_source")
+private val KEY_AGC_ENABLED = booleanPreferencesKey("agc_enabled")
 // Legacy key: kept only to migrate pre-2.3 installs to KEY_MIC_MODE
 private val KEY_PTT_MODE = booleanPreferencesKey("ptt_mode")
 private val KEY_MIC_MODE = stringPreferencesKey("mic_mode")
@@ -95,6 +98,24 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setNoiseSuppression(enabled: Boolean) {
         context.settingsDataStore.edit { it[KEY_NOISE_SUPPRESSION] = enabled }
+    }
+
+    /** Microphone capture source (platform voice pipeline / raw mic / unprocessed). */
+    val captureSource: Flow<CaptureSource> = context.settingsDataStore.data
+        .map { CaptureSource.from(it[KEY_CAPTURE_SOURCE]) }
+
+    suspend fun setCaptureSource(source: CaptureSource) {
+        context.settingsDataStore.edit { it[KEY_CAPTURE_SOURCE] = source.raw }
+    }
+
+    // Default off: platform AGC pumps volume as background noise changes,
+    // which destabilizes the VAD threshold (browsers and MicYou default it
+    // off for the same reason)
+    val agcEnabled: Flow<Boolean> = context.settingsDataStore.data
+        .map { it[KEY_AGC_ENABLED] ?: false }
+
+    suspend fun setAgcEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { it[KEY_AGC_ENABLED] = enabled }
     }
 
     /**

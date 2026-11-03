@@ -89,6 +89,12 @@
     <string name="mic_mode_open">Open microphone</string>
     <string name="vad_threshold">Trigger threshold: %1$d dB</string>
     <string name="vad_threshold_hint">Audio above the threshold is transmitted. -45 dB suits most environments.</string>
+    <string name="agc">Microphone auto gain</string>
+    <string name="capture_source">Capture source</string>
+    <string name="capture_source_voice_communication">Standard</string>
+    <string name="capture_source_mic">Raw microphone</string>
+    <string name="capture_source_voice_performance">Unprocessed</string>
+    <string name="capture_source_hint">Takes effect on the next capture start (reconnect). Unprocessed skips the platform voice pipeline — clearer on some devices.</string>
     <string name="user_uid">Unique ID</string>
     <string name="user_platform">Platform</string>
     <string name="user_version">Version</string>
