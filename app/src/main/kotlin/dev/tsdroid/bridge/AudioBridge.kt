@@ -363,15 +363,20 @@ class AudioBridge(
             return
         }
 
+        // Apply the capture preferences BEFORE creating the recorder: the
+        // source setting must govern this very capture. (These used to be
+        // assigned after createAudioRecord, so a settings change took effect
+        // one session late — the stale source silently ran until the first
+        // rebuild swapped it, making the capture intermittently mute.)
+        captureNsEnabled = noiseSuppressionEnabled
+        captureSourcePref = captureSource
+        captureAgcEnabled = agcEnabled
         val record = createAudioRecord() ?: return
         audioRecord = record
         _isCapturing.value = true
         captureScope = scope
         lastCaptureProgressAt = SystemClock.elapsedRealtime()
         requestAudioFocus()
-        captureNsEnabled = noiseSuppressionEnabled
-        captureSourcePref = captureSource
-        captureAgcEnabled = agcEnabled
         attachVoiceEffects(record)
 
         captureJob = scope.launch(Dispatchers.IO) {
@@ -597,6 +602,7 @@ class AudioBridge(
         // reject unusual sources outright, and a silent fallback beats a dead
         // capture loop
         val requested = captureSourcePref.resolveSourceId()
+        Log.i(TAG, "Capture source: ${captureSourcePref.raw} (id=$requested)")
         return tryCreateAudioRecord(requested, minBuf)
             ?: if (requested != MediaRecorder.AudioSource.VOICE_COMMUNICATION) {
                 tryCreateAudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, minBuf)
