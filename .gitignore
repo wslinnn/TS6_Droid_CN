@@ -22,3 +22,19 @@ Thumbs.db
 
 # TeamSpeak SDK (downloaded binary)
 teamspeak-sdk-3.5.0/
+
+# Kotlin build cache
+.kotlin/
+
+# Local clone of the tslib_multi repo (upstream: wslinnn/tslib_multi,
+# built and released by its own CI — never commit it here)
+/tslib_multi/
+
+# Project-local notes, kept out of the repo for now
+/AGENTS.md
+
+# Working documents (plans / investigations); move out of ignore to track
+/docs/
+
+# Scratch repro test, not part of the suite
+app/src/test/java/dev/tsdroid/MarkdownReproTest.kt
