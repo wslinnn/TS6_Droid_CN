@@ -94,6 +94,9 @@ class AudioBridge(
 
         /** Output volume multiplier while another app holds transient focus (can-duck). */
         private const val DUCK_FACTOR = 0.3f
+
+        /** Mic frames within this long after a playback write still count as far-active for the ERLE probe. */
+        private const val FAR_ACTIVE_GRACE_MS = 100L
     }
 
     private val audioConfig = AudioConfig()
@@ -133,6 +136,18 @@ class AudioBridge(
     private var audioTrack: AudioTrack? = null
     private var noiseSuppressor: NoiseSuppressor? = null
     private var acousticEchoCanceler: AcousticEchoCanceler? = null
+
+    /**
+     * ERLE yardstick: quantifies whether the platform AEC actually cancels.
+     * Media-routed playback (USAGE_GAME) gives the HAL AEC no reference, so
+     * this is expected to read ~0dB — the phase-2 software AEC is accepted
+     * against this baseline.
+     */
+    private val echoProbe = EchoProbe()
+
+    /** Wall clock until which playback counts as far-active for [echoProbe]. */
+    @Volatile
+    private var farActiveUntil = 0L
 
     /**
      * Guards [audioRecord]/effect swaps between startCapture/stopCapture
@@ -426,6 +441,9 @@ class AudioBridge(
                         zeroFrameStreak = 0
                         consecutiveRebuilds = 0
                     }
+                    // ERLE probe observes the raw mic — before gain/VAD/encode,
+                    // unaffected by mute (which only gates transmission)
+                    echoProbe.onMicFrame(buffer, System.currentTimeMillis() < farActiveUntil)
                 }
                 if (read == FRAME_SIZE_SAMPLES && !_isMuted.value && micGainFactor != 0f) {
                     // Mic gain is applied before VAD and encode so "turn it up
@@ -559,7 +577,8 @@ class AudioBridge(
             try {
                 NoiseSuppressor.create(record.audioSessionId)?.also {
                     noiseSuppressor = it
-                    Log.i(TAG, "NoiseSuppressor enabled (session=${record.audioSessionId})")
+                    it.enabled = true
+                    Log.i(TAG, "NoiseSuppressor enabled (session=${record.audioSessionId}, enabled=${it.enabled})")
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to create NoiseSuppressor", e)
@@ -577,7 +596,10 @@ class AudioBridge(
             try {
                 AcousticEchoCanceler.create(record.audioSessionId)?.also {
                     acousticEchoCanceler = it
-                    Log.i(TAG, "AcousticEchoCanceler enabled (session=${record.audioSessionId})")
+                    it.enabled = true
+                    // The readback matters: "created" does not imply "cancelling"
+                    // — with media-routed playback the HAL AEC has no reference.
+                    Log.i(TAG, "AcousticEchoCanceler enabled (session=${record.audioSessionId}, enabled=${it.enabled})")
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to create AcousticEchoCanceler", e)
@@ -888,6 +910,9 @@ class AudioBridge(
                     val bytes = shortsToBytes(mixBuffer)
                     audioTrack?.write(bytes, 0, bytes.size)
                     writtenFrames += FRAME_SIZE_SAMPLES
+                    // Probe sees the post-gain mix — exactly what the speaker plays
+                    echoProbe.onFarFrame(mixBuffer)
+                    farActiveUntil = now + FAR_ACTIVE_GRACE_MS
                 } else {
                     // No audio data — block until a frame arrives (producer
                     // offers the wake signal) or the idle safety-net timeout
@@ -987,6 +1012,12 @@ class AudioBridge(
             val samples = encodeSamplesUs.take(n.coerceAtMost(encodeSamplesUs.size)).sorted()
             val p95 = samples[(samples.size * 95 / 100).coerceIn(0, samples.size - 1)]
             Log.i(TAG, "AudioEnc 30s: n=${samples.size} p95=${p95}us max=${samples.last()}us (budget 20000us)")
+        }
+        val echo = echoProbe.snapshotAndReset()
+        if (echo.farMs > 0) {
+            val erleAll = echo.erleAllDb?.let { String.format("%.1f", it) } ?: "n/a"
+            val erleQuiet = echo.erleQuietDb?.let { String.format("%.1f", it) } ?: "n/a"
+            Log.i(TAG, "AudioEcho 30s: farMs=${echo.farMs} erleAll=$erleAll erleQuiet=$erleQuiet pairs=${echo.pairedFrames} quiet=${echo.quietFrames}")
         }
     }
 
