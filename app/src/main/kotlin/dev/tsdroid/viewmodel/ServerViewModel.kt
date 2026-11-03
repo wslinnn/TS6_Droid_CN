@@ -19,6 +19,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.tsdroid.bridge.AvatarCache
 import dev.tsdroid.bridge.AudioBridge
+import dev.tsdroid.bridge.CaptureSource
 import dev.tsdroid.bridge.FileCache
 import dev.tsdroid.bridge.IconCache
 import dev.tsdroid.bridge.MicMode
@@ -288,8 +289,8 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     val animeBackground: StateFlow<Boolean> = settingsStore.animeBackground
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    val noiseSuppression: StateFlow<Boolean> = settingsStore.noiseSuppression
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val captureSource: StateFlow<CaptureSource> = settingsStore.captureSource
+        .stateIn(viewModelScope, SharingStarted.Eagerly, CaptureSource.VOICE_PERFORMANCE)
 
     // File manager state
     private val _fileManagerOpen = MutableStateFlow(false)
@@ -499,19 +500,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             }
             // Start audio capture if not already running
             if (!service.audioBridge.isCapturing.value) {
-                service.audioBridge.startCapture(viewModelScope, noiseSuppression.value)
-            }
-            // Restart capture when the noise suppression setting changes so
-            // the toggle takes effect in the current session
-            viewModelScope.launch {
-                var applied = noiseSuppression.value
-                settingsStore.noiseSuppression.collect { enabled ->
-                    if (enabled != applied && service.audioBridge.isCapturing.value) {
-                        service.audioBridge.stopCapture()
-                        service.audioBridge.startCapture(viewModelScope, enabled)
-                    }
-                    applied = enabled
-                }
+                service.audioBridge.startCapture(viewModelScope, captureSource.value)
             }
             // Apply persisted audio gain
             service.audioBridge.gainFactor = audioGain.value
@@ -945,10 +934,6 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setAnimeBackground(enabled: Boolean) {
         viewModelScope.launch { settingsStore.setAnimeBackground(enabled) }
-    }
-
-    fun setNoiseSuppression(enabled: Boolean) {
-        viewModelScope.launch { settingsStore.setNoiseSuppression(enabled) }
     }
 
     /** Mute state to restore when a PTT press ends (overlay unmutes survive). */

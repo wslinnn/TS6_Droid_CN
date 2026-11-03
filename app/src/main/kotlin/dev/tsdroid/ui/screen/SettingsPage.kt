@@ -433,9 +433,7 @@ fun AudioSection() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val settingsStore = remember { SettingsStore(context) }
-    val noiseSuppression by settingsStore.noiseSuppression.collectAsStateWithLifecycle(initialValue = true)
-    val agcEnabled by settingsStore.agcEnabled.collectAsStateWithLifecycle(initialValue = false)
-    val captureSource by settingsStore.captureSource.collectAsStateWithLifecycle(initialValue = CaptureSource.VOICE_COMMUNICATION)
+    val captureSource by settingsStore.captureSource.collectAsStateWithLifecycle(initialValue = CaptureSource.VOICE_PERFORMANCE)
     val micMode by settingsStore.micMode.collectAsStateWithLifecycle(initialValue = MicMode.PTT)
     val vadThreshold by settingsStore.vadThresholdDb.collectAsStateWithLifecycle(initialValue = VadGate.DEFAULT_THRESHOLD_DB)
     val audioGain by settingsStore.audioGain.collectAsStateWithLifecycle(initialValue = 1.0f)
@@ -482,20 +480,6 @@ fun AudioSection() {
                     steps = 15,
                 )
             }
-
-            // 麦克风降噪
-            SettingsSwitchRow(
-                label = stringResource(R.string.noise_suppression),
-                checked = noiseSuppression,
-                onCheckedChange = { scope.launch { settingsStore.setNoiseSuppression(it) } },
-            )
-
-            // 自动增益（默认关：会随背景噪声泵音量，干扰 VAD 阈值）
-            SettingsSwitchRow(
-                label = stringResource(R.string.agc),
-                checked = agcEnabled,
-                onCheckedChange = { scope.launch { settingsStore.setAgcEnabled(it) } },
-            )
 
             // 采集源：切换在下次开始采集（重连）后生效
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {

@@ -51,7 +51,6 @@
     <string name="auto_load_images">自动加载图片</string>
     <string name="enable_floating_window">启用悬浮窗</string>
     <string name="anime_background">我是二刺螈</string>
-    <string name="noise_suppression">麦克风降噪</string>
     <string name="chat">聊天</string>
     <string name="push_to_talk">按住说话</string>
     <string name="ptt">按键说话</string>
@@ -88,12 +87,12 @@
     <string name="mic_mode_open">开放麦克风</string>
     <string name="vad_threshold">触发阈值：%1$d dB</string>
     <string name="vad_threshold_hint">说话声高于阈值时自动发送。-45 dB 适合大多数环境。</string>
-    <string name="agc">麦克风自动增益</string>
     <string name="capture_source">采集源</string>
     <string name="capture_source_voice_communication">标准</string>
     <string name="capture_source_mic">原始麦克风</string>
     <string name="capture_source_voice_performance">纯净采集</string>
-    <string name="capture_source_hint">下次开始采集（重连）后生效。纯净采集跳过平台语音处理，部分机型上更清晰。</string>
+    <string name="capture_source_hint">音频处理全部由软件完成，默认纯净采集；Android 10 以下设备自动回退原始麦克风。</string>
+
     <string name="user_uid">唯一 ID</string>
     <string name="user_platform">平台</string>
     <string name="user_version">版本</string>

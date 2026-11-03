@@ -536,12 +536,9 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         serviceScope.launch {
             try {
                 audioBridge.stopCapture()
-                val settings = SettingsStore(applicationContext)
                 audioBridge.startCapture(
                     serviceScope,
-                    settings.noiseSuppression.first(),
-                    settings.captureSource.first(),
-                    settings.agcEnabled.first(),
+                    SettingsStore(applicationContext).captureSource.first(),
                 )
                 Log.i(TAG, "Capture restarted ($reason)")
             } catch (e: Exception) {
@@ -596,12 +593,9 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         return try {
             tsClient.connect(address, identity, nickname, password)
             acquireVoiceLocks()
-            val settings = SettingsStore(applicationContext)
             audioBridge.startCapture(
                 serviceScope,
-                settings.noiseSuppression.first(),
-                settings.captureSource.first(),
-                settings.agcEnabled.first(),
+                SettingsStore(applicationContext).captureSource.first(),
             )
             // Sync initial mute state with server
             if (audioBridge.isMuted.value) {

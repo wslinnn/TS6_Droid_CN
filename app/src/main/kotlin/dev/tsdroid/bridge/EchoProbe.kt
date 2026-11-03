@@ -6,21 +6,21 @@ import kotlin.math.sqrt
 /**
  * Echo-return-loss-enhancement (ERLE) probe.
  *
- * Pairs every mic frame captured while the speaker was playing with the most
- * recent far-end (playback mix) frame energy, split into two buckets:
+ * Pairs each local-silent mic frame with the most recent far-end (playback
+ * mix) frame energy, split into two buckets:
  *
- * - **all pairs** (`erleAllDb`): every far-active mic frame. When the AEC is
- *   mounted but ineffective (media-routed playback gives the HAL no
- *   reference), the mic carries loud echo and this reading stays low — the
- *   "broken" fingerprint.
+ * - **all pairs** (`erleAllDb`): every far-active mic frame. With no echo
+ *   cancellation active (or a broken one), the mic carries loud echo and
+ *   this reading stays low — the "no AEC" fingerprint.
  * - **quiet pairs** (`erleQuietDb`): mic frames at/below [SILENCE_RMS] only.
  *   With cancellation actually working the residual is quiet, so this is the
  *   "working" fingerprint. Loud local speech also lands in the all bucket
  *   (double-talk contaminates it), which is why the quiet bucket exists.
  *
  * Pure aggregation — the caller feeds frames and reads one snapshot per
- * diagnostics flush. No clock, no Android types: JVM-testable, and reusable
- * as the acceptance yardstick for the phase-2 software AEC.
+ * diagnostics flush. No clock, no Android types: JVM-testable, and the
+ * acceptance yardstick for the software AEC (echo subtraction and later
+ * software NS run entirely in-process).
  */
 class EchoProbe {
 

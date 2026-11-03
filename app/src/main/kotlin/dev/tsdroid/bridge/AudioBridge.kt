@@ -11,9 +11,6 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
-import android.media.audiofx.AcousticEchoCanceler
-import android.media.audiofx.AutomaticGainControl
-import android.media.audiofx.NoiseSuppressor
 import android.os.SystemClock
 import dev.tsdroid.data.AppLog as Log
 import androidx.core.content.ContextCompat
@@ -163,9 +160,6 @@ class AudioBridge(
 
     private var audioRecord: AudioRecord? = null
     private var audioTrack: AudioTrack? = null
-    private var noiseSuppressor: NoiseSuppressor? = null
-    private var acousticEchoCanceler: AcousticEchoCanceler? = null
-    private var automaticGainControl: AutomaticGainControl? = null
 
     /**
      * ERLE yardstick: quantifies whether the platform AEC actually cancels.
@@ -186,17 +180,9 @@ class AudioBridge(
      */
     private val captureSwapLock = Any()
 
-    /** Whether [attachVoiceEffects] should create a NoiseSuppressor. */
-    @Volatile
-    private var captureNsEnabled = true
-
     /** Requested capture source for the next recorder (re-evaluated per rebuild). */
     @Volatile
-    private var captureSourcePref = CaptureSource.VOICE_COMMUNICATION
-
-    /** Whether [attachVoiceEffects] should create an AutomaticGainControl. */
-    @Volatile
-    private var captureAgcEnabled = false
+    private var captureSourcePref = CaptureSource.VOICE_PERFORMANCE
 
     /**
      * Monotonic timestamp of the last **non-silent** mic data (a partial
@@ -361,9 +347,7 @@ class AudioBridge(
     @SuppressLint("MissingPermission")
     fun startCapture(
         scope: CoroutineScope,
-        noiseSuppressionEnabled: Boolean = true,
-        captureSource: CaptureSource = CaptureSource.VOICE_COMMUNICATION,
-        agcEnabled: Boolean = false,
+        captureSource: CaptureSource = CaptureSource.VOICE_PERFORMANCE,
     ) {
         if (_isCapturing.value) return
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
@@ -378,16 +362,13 @@ class AudioBridge(
         // assigned after createAudioRecord, so a settings change took effect
         // one session late — the stale source silently ran until the first
         // rebuild swapped it, making the capture intermittently mute.)
-        captureNsEnabled = noiseSuppressionEnabled
         captureSourcePref = captureSource
-        captureAgcEnabled = agcEnabled
         val record = createAudioRecord() ?: return
         audioRecord = record
         _isCapturing.value = true
         captureScope = scope
         lastCaptureProgressAt = SystemClock.elapsedRealtime()
         requestAudioFocus()
-        attachVoiceEffects(record)
 
         captureJob = scope.launch(Dispatchers.IO) {
             val buffer = ShortArray(FRAME_SIZE_SAMPLES)
@@ -426,12 +407,6 @@ class AudioBridge(
                 // would wedge this rebuild path for good.
                 recorderStopper.stopAndRelease(dead)
                 synchronized(captureSwapLock) {
-                    noiseSuppressor?.release()
-                    noiseSuppressor = null
-                    acousticEchoCanceler?.release()
-                    acousticEchoCanceler = null
-                    automaticGainControl?.release()
-                    automaticGainControl = null
                     if (audioRecord === dead) audioRecord = null
                 }
                 delay(rebuildBackoffMs(consecutiveRebuilds))
@@ -449,7 +424,6 @@ class AudioBridge(
                         fresh.release()
                         return null
                     }
-                    attachVoiceEffects(fresh)
                     audioRecord = fresh
                 }
                 zeroFrameStreak = 0
@@ -572,10 +546,10 @@ class AudioBridge(
             }
             _isCapturing.value = false
             _isLocalVoiceActive.value = false
-            // Release only the local handle. The audioRecord/noiseSuppressor
-            // fields belong to startCapture/stopCapture on the caller thread,
-            // so this late cleanup can never clear or double-release a
-            // replacement instance from a quick stop→start cycle.
+            // Release only the local handle. The audioRecord field belongs to
+            // startCapture/stopCapture on the caller thread, so this late
+            // cleanup can never clear or double-release a replacement
+            // instance from a quick stop→start cycle.
             recorderStopper.stopAndRelease(record)
         }
     }
@@ -595,12 +569,6 @@ class AudioBridge(
         val record = synchronized(captureSwapLock) {
             val rec = audioRecord
             audioRecord = null
-            noiseSuppressor?.release()
-            noiseSuppressor = null
-            acousticEchoCanceler?.release()
-            acousticEchoCanceler = null
-            automaticGainControl?.release()
-            automaticGainControl = null
             rec
         }
         if (record != null) {
@@ -624,19 +592,20 @@ class AudioBridge(
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
         )
-        // Requested source first, then the proven defaults: aggressive ROMs
-        // reject unusual sources outright, and a silent fallback beats a dead
-        // capture loop
+        // Requested raw source first, then MIC, then the platform voice
+        // source as the last resort: the all-software pipeline wants an
+        // unprocessed signal (vendor voice chains nonlinearly process the
+        // echo path), and a silent fallback beats a dead capture loop
         val requested = captureSourcePref.resolveSourceId()
         Log.i(TAG, "Capture source: ${captureSourcePref.raw} (id=$requested)")
         return tryCreateAudioRecord(requested, minBuf)
-            ?: if (requested != MediaRecorder.AudioSource.VOICE_COMMUNICATION) {
-                tryCreateAudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, minBuf)
+            ?: if (requested != MediaRecorder.AudioSource.MIC) {
+                tryCreateAudioRecord(MediaRecorder.AudioSource.MIC, minBuf)
             } else {
                 null
             }
-            ?: if (requested != MediaRecorder.AudioSource.MIC) {
-                tryCreateAudioRecord(MediaRecorder.AudioSource.MIC, minBuf)
+            ?: if (requested != MediaRecorder.AudioSource.VOICE_COMMUNICATION) {
+                tryCreateAudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, minBuf)
             } else {
                 null
             }
@@ -668,67 +637,6 @@ class AudioBridge(
             Log.e(TAG, "Failed to start microphone capture (source=$sourceId)", e)
             record.release()
             null
-        }
-    }
-
-    /**
-     * (Re)attach the voice effects to the given recorder's audio session.
-     * Must run with [captureSwapLock] held when swapping the field alongside.
-     */
-    private fun attachVoiceEffects(record: AudioRecord) {
-        noiseSuppressor?.release()
-        noiseSuppressor = null
-        if (captureNsEnabled && NoiseSuppressor.isAvailable()) {
-            try {
-                NoiseSuppressor.create(record.audioSessionId)?.also {
-                    noiseSuppressor = it
-                    it.enabled = true
-                    Log.i(TAG, "NoiseSuppressor enabled (session=${record.audioSessionId}, enabled=${it.enabled})")
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to create NoiseSuppressor", e)
-            }
-        } else {
-            Log.i(TAG, "NoiseSuppressor skipped: enabled=$captureNsEnabled, available=${NoiseSuppressor.isAvailable()}")
-        }
-        // Echo cancellation is independent of the noise-suppression toggle:
-        // without it, speaker playback bleeds into the mic and remote users
-        // hear themselves. VOICE_COMMUNICATION implies AEC on most devices,
-        // but that is not guaranteed everywhere — attach it when offered.
-        acousticEchoCanceler?.release()
-        acousticEchoCanceler = null
-        if (AcousticEchoCanceler.isAvailable()) {
-            try {
-                AcousticEchoCanceler.create(record.audioSessionId)?.also {
-                    acousticEchoCanceler = it
-                    it.enabled = true
-                    // The readback matters: "created" does not imply "cancelling"
-                    // — with media-routed playback the HAL AEC has no reference.
-                    Log.i(TAG, "AcousticEchoCanceler enabled (session=${record.audioSessionId}, enabled=${it.enabled})")
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to create AcousticEchoCanceler", e)
-            }
-        } else {
-            Log.i(TAG, "AcousticEchoCanceler not available on this device")
-        }
-        // Platform AGC: opt-in. Browsers and MicYou both default it off — it
-        // pumps volume as background noise changes, destabilizing the VAD
-        // threshold; offered for users whose mics run too quiet.
-        automaticGainControl?.release()
-        automaticGainControl = null
-        if (captureAgcEnabled && AutomaticGainControl.isAvailable()) {
-            try {
-                AutomaticGainControl.create(record.audioSessionId)?.also {
-                    automaticGainControl = it
-                    it.enabled = true
-                    Log.i(TAG, "AutomaticGainControl enabled (session=${record.audioSessionId}, enabled=${it.enabled})")
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to create AutomaticGainControl", e)
-            }
-        } else {
-            Log.i(TAG, "AutomaticGainControl skipped: enabled=$captureAgcEnabled, available=${AutomaticGainControl.isAvailable()}")
         }
     }
 
@@ -1117,12 +1025,6 @@ class AudioBridge(
         audioTrack?.stop()
         audioTrack?.release()
         audioTrack = null
-        noiseSuppressor?.release()
-        noiseSuppressor = null
-        acousticEchoCanceler?.release()
-        acousticEchoCanceler = null
-        automaticGainControl?.release()
-        automaticGainControl = null
         encoder?.close()
         encoder = null
         // Close per-user decoders
