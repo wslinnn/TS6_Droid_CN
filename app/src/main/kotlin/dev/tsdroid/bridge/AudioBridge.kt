@@ -136,6 +136,11 @@ class AudioBridge(
     @Volatile
     private var comfortNoiseFrames = 0
 
+    /** TOC frame-duration histogram this window (key = µs, value = packets). */
+    private val tocDurationCounts = ConcurrentHashMap<Long, Int>()
+    @Volatile
+    private var tocUnparseableFrames = 0
+
     // Encoder timing ring (µs per encode call) — validates the complexity-8
     // CPU budget on real devices (frame budget is 20ms = 20000µs)
     private val encodeSamplesUs = LongArray(512)
@@ -965,6 +970,15 @@ class AudioBridge(
         if (opusData.size <= COMFORT_NOISE_FRAME_MAX_BYTES) {
             comfortNoiseFrames++
         }
+        // Duration histogram: the pipeline assumes constant 20ms frames; a
+        // sender emitting other durations would be silently truncated by the
+        // fixed 960-sample decode buffers
+        val durationUs = OpusFrames.totalDurationUs(opusData)
+        if (durationUs == null) {
+            tocUnparseableFrames++
+        } else {
+            tocDurationCounts.merge(durationUs, 1, Int::plus)
+        }
         if (userId in mutedUserIds) return
         if (_isOutputMuted.value) return // Global output mute — discard incoming audio
         if (outputSuspendedByFocus) return // Another app holds focus — discard instead of queueing
@@ -1059,6 +1073,13 @@ class AudioBridge(
         if (cn > 0) {
             Log.i(TAG, "AudioComfort 30s: shortFrames=$cn (≤${COMFORT_NOISE_FRAME_MAX_BYTES}B, decode-skip pending)")
             comfortNoiseFrames = 0
+        }
+        if (tocDurationCounts.isNotEmpty() || tocUnparseableFrames > 0) {
+            val hist = tocDurationCounts.entries.sortedBy { it.key }
+                .joinToString(" ") { "${it.key / 1000.0}ms=${it.value}" }
+            Log.i(TAG, "AudioToc 30s: $hist unparseable=$tocUnparseableFrames")
+            tocDurationCounts.clear()
+            tocUnparseableFrames = 0
         }
         val echo = echoProbe.snapshotAndReset()
         if (echo.farMs > 0) {
