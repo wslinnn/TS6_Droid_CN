@@ -15,6 +15,7 @@ import android.os.SystemClock
 import dev.tsdroid.data.AppLog as Log
 import androidx.core.content.ContextCompat
 import dev.tslib.AudioConfig
+import dev.tslib.EchoCanceller
 import dev.tslib.OpusCodec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -102,6 +103,10 @@ class AudioBridge(
         /** Mic frames within this long after a playback write still count as far-active for the ERLE probe. */
         private const val FAR_ACTIVE_GRACE_MS = 100L
 
+        /** Software AEC filter tail — echo paths slower than this cannot be cancelled. */
+        private const val AEC_TAIL_MS = 250
+        private const val AEC_TAIL_SAMPLES = SAMPLE_RATE * AEC_TAIL_MS / 1000
+
         /**
          * TS clients emit tiny (~3-byte) comfort-noise frames during open-mic
          * silence — RFC 6716's minimum meaningful payload is far larger, so
@@ -172,6 +177,24 @@ class AudioBridge(
     /** Wall clock until which playback counts as far-active for [echoProbe]. */
     @Volatile
     private var farActiveUntil = 0L
+
+    /**
+     * Playback→capture reference stream for the software AEC. Fed by the
+     * playback loop at the AudioTrack write point, consumed by the capture
+     * loop once per frame.
+     */
+    private val echoReference = EchoReference()
+
+    /** True while a capture session owns a live [EchoCanceller] (gates the reference feed). */
+    @Volatile
+    private var aecRunning = false
+
+    // Software-AEC processing timing ring (µs per frame), same pattern as
+    // the encoder ring — validates the 2ms/frame budget on real devices
+    private val echoProcSamplesUs = LongArray(512)
+    private var echoProcSampleIdx = 0
+    @Volatile
+    private var echoProcSampleCount = 0
 
     /**
      * Guards [audioRecord]/effect swaps between startCapture/stopCapture
@@ -396,6 +419,24 @@ class AudioBridge(
             var emptyReadStreak = 0
             var consecutiveRebuilds = 0
 
+            // Software AEC: one engine per capture session, owned by this
+            // coroutine and destroyed in the cleanup below. Creation failure
+            // (old .so without the JNI symbols, OOM) never blocks capture —
+            // the session runs without AEC and the next startCapture retries.
+            val aec = try {
+                EchoCanceller(SAMPLE_RATE, FRAME_SIZE_SAMPLES, AEC_TAIL_SAMPLES).also {
+                    echoReference.reset()
+                    aecRunning = true
+                    Log.i(TAG, "Software AEC started (tail=${AEC_TAIL_MS}ms)")
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "Software AEC unavailable this session", t)
+                null
+            }
+            val aecFar = ShortArray(FRAME_SIZE_SAMPLES)
+            val aecOut = ShortArray(FRAME_SIZE_SAMPLES)
+            var aecFailStreak = 0
+
             // Rebuild the capture device from inside the loop. Returns the
             // fresh record, or null when capture was stopped meanwhile or
             // the rebuild keeps failing (then the loop ends and the service
@@ -491,8 +532,27 @@ class AudioBridge(
                         // watchdog satisfied forever
                         lastCaptureProgressAt = SystemClock.elapsedRealtime()
                     }
-                    // ERLE probe observes the raw mic — before gain/VAD/encode,
-                    // unaffected by mute (which only gates transmission)
+                    // Software AEC: every full frame on the raw signal, before
+                    // micGain (the filter converges best on raw samples) and
+                    // before the send gate (mute only gates the encoder and
+                    // must not starve the adaptive filter).
+                    if (aec != null) {
+                        echoReference.read(aecFar)
+                        val t0 = System.nanoTime()
+                        try {
+                            aec.process(buffer, aecFar, aecOut)
+                            System.arraycopy(aecOut, 0, buffer, 0, FRAME_SIZE_SAMPLES)
+                            aecFailStreak = 0
+                        } catch (t: Throwable) {
+                            // Bypass on engine error: forward the raw mic — an
+                            // audible echo beats swallowed speech.
+                            if (aecFailStreak++ == 0) Log.e(TAG, "AEC frame bypass: ${t.message}")
+                        }
+                        recordEchoProcUs((System.nanoTime() - t0) / 1000)
+                    }
+                    // ERLE probe observes the post-AEC mic — what actually gets
+                    // transmitted; unaffected by mute (which only gates the
+                    // encoder).
                     echoProbe.onMicFrame(buffer, System.currentTimeMillis() < farActiveUntil)
                 } else {
                     // Partial read (0 < read < frame): still proves the device is alive
@@ -546,6 +606,14 @@ class AudioBridge(
             }
             _isCapturing.value = false
             _isLocalVoiceActive.value = false
+            // Stop the reference feed before tearing the engine down; both
+            // are synchronized, so a concurrent playback push can never touch
+            // a destroyed native handle.
+            aecRunning = false
+            try {
+                aec?.close()
+            } catch (_: Throwable) {}
+            echoReference.reset()
             // Release only the local handle. The audioRecord field belongs to
             // startCapture/stopCapture on the caller thread, so this late
             // cleanup can never clear or double-release a replacement
@@ -943,6 +1011,12 @@ class AudioBridge(
                     val bytes = shortsToBytes(mixBuffer)
                     audioTrack?.write(bytes, 0, bytes.size)
                     writtenFrames += FRAME_SIZE_SAMPLES
+                    // AEC reference: exactly the PCM handed to the speaker
+                    // (post-gain, post-duck, post-softClip) — feeding the raw
+                    // mix pre-DUCK would feed a distorted reference.
+                    if (aecRunning) {
+                        echoReference.push(mixBuffer, SystemClock.elapsedRealtime())
+                    }
                     // Probe sees the post-gain mix — exactly what the speaker plays
                     echoProbe.onFarFrame(mixBuffer)
                     farActiveUntil = now + FAR_ACTIVE_GRACE_MS
@@ -1081,10 +1155,23 @@ class AudioBridge(
             tocUnparseableFrames = 0
         }
         val echo = echoProbe.snapshotAndReset()
-        if (echo.farMs > 0) {
+        val ref = echoReference.snapshotAndReset()
+        if (echo.farMs > 0 || ref.padFrames > 0 || ref.skipFrames > 0 || ref.resyncs > 0) {
             val erleAll = echo.erleAllDb?.let { String.format("%.1f", it) } ?: "n/a"
             val erleQuiet = echo.erleQuietDb?.let { String.format("%.1f", it) } ?: "n/a"
-            Log.i(TAG, "AudioEcho 30s: farMs=${echo.farMs} erleAll=$erleAll erleQuiet=$erleQuiet pairs=${echo.pairedFrames} quiet=${echo.quietFrames}")
+            Log.i(
+                TAG,
+                "AudioEcho 30s: farMs=${echo.farMs} erleAll=$erleAll erleQuiet=$erleQuiet " +
+                    "pairs=${echo.pairedFrames} quiet=${echo.quietFrames} " +
+                    "refPad=${ref.padFrames} refSkip=${ref.skipFrames} refResync=${ref.resyncs}",
+            )
+        }
+        val an = echoProcSampleCount
+        if (an > 0) {
+            echoProcSampleCount = 0
+            val samples = echoProcSamplesUs.take(an.coerceAtMost(echoProcSamplesUs.size)).sorted()
+            val p95 = samples[(samples.size * 95 / 100).coerceIn(0, samples.size - 1)]
+            Log.i(TAG, "AudioEchoProc 30s: n=${samples.size} p95=${p95}us max=${samples.last()}us (budget 20000us)")
         }
     }
 
@@ -1093,6 +1180,13 @@ class AudioBridge(
         encodeSamplesUs[encodeSampleIdx and (encodeSamplesUs.size - 1)] = us
         encodeSampleIdx++
         encodeSampleCount++
+    }
+
+    /** Record one AEC process call duration (µs) into the diagnostics ring. */
+    private fun recordEchoProcUs(us: Long) {
+        echoProcSamplesUs[echoProcSampleIdx and (echoProcSamplesUs.size - 1)] = us
+        echoProcSampleIdx++
+        echoProcSampleCount++
     }
 
     /** Record one enqueue→playback latency (µs) into the diagnostics ring. */
