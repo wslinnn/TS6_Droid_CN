@@ -171,6 +171,12 @@ class AudioBridge(
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
+    /**
+     * AudioRecord.stop() can hang in native code; teardown must never run
+     * inline on the capture coroutine or under captureSwapLock (see [RecorderStopper]).
+     */
+    private val recorderStopper = RecorderStopper()
+
     private var audioFocusRequest: AudioFocusRequest? = null
 
     // Scope of the running capture — used to retry focus acquisition after
@@ -359,14 +365,9 @@ class AudioBridge(
             suspend fun rebuildOrStop(dead: AudioRecord): AudioRecord? {
                 // Release the dead handle first: stopCapture may run during
                 // the backoff below, and it must find a consistent state.
-                try {
-                    dead.stop()
-                } catch (_: Throwable) {
-                }
-                try {
-                    dead.release()
-                } catch (_: Throwable) {
-                }
+                // Off-thread with a bounded wait — an inline native stop() hang
+                // would wedge this rebuild path for good.
+                recorderStopper.stopAndRelease(dead)
                 synchronized(captureSwapLock) {
                     noiseSuppressor?.release()
                     noiseSuppressor = null
@@ -497,14 +498,7 @@ class AudioBridge(
             // fields belong to startCapture/stopCapture on the caller thread,
             // so this late cleanup can never clear or double-release a
             // replacement instance from a quick stop→start cycle.
-            try {
-                record.stop()
-            } catch (_: Throwable) {
-            }
-            try {
-                record.release()
-            } catch (_: Throwable) {
-            }
+            recorderStopper.stopAndRelease(record)
         }
     }
 
@@ -517,14 +511,20 @@ class AudioBridge(
         captureScope = null
         vadGate.reset()
         abandonAudioFocus()
-        synchronized(captureSwapLock) {
-            audioRecord?.stop()
-            audioRecord?.release()
+        // Swap the fields out under the lock, but never wait for the record's
+        // teardown while holding it: a hanging native stop() on the caller
+        // thread would deadlock every later stop/rebuild behind captureSwapLock.
+        val record = synchronized(captureSwapLock) {
+            val rec = audioRecord
             audioRecord = null
             noiseSuppressor?.release()
             noiseSuppressor = null
             acousticEchoCanceler?.release()
             acousticEchoCanceler = null
+            rec
+        }
+        if (record != null) {
+            recorderStopper.stopAndRelease(record)
         }
     }
 
