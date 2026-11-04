@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 
@@ -309,6 +310,15 @@ class AudioBridge(
     private val routeManager = AudioRouteManager(context, audioManager, object : AudioRouteManager.Listener {
         override suspend fun onRouteChanged(comm: Boolean, deviceName: String?) {
             applyRoute(comm, deviceName)
+        }
+
+        override suspend fun onCommRoutePrepare() {
+            releasePlaybackForRouteSwitch()
+        }
+
+        override suspend fun onCommRouteAborted() {
+            Log.i(TAG, "Comm route aborted; restoring media playback")
+            rebuildTrackForRoute(commRoute = false)
         }
     })
 
@@ -1032,6 +1042,29 @@ class AudioBridge(
     }
 
     /**
+     * Stop and release the media track before the communication route starts.
+     * While an A2DP-routed track is active the headset keeps its audio path in
+     * music mode and never switches to HFP — SCO then connects but carries no
+     * audio in either direction.
+     */
+    private suspend fun releasePlaybackForRouteSwitch() {
+        val old = synchronized(trackSwapLock) {
+            val t = audioTrack
+            audioTrack = null
+            t
+        } ?: return
+        Log.i(TAG, "Releasing media track before comm route (A2DP -> idle)")
+        withContext(Dispatchers.IO) {
+            try {
+                old.stop()
+                old.release()
+            } catch (t: Throwable) {
+                Log.w(TAG, "Media track release before comm route failed (continuing)", t)
+            }
+        }
+    }
+
+    /**
      * Swap the playback track for the new route. The field swap is atomic
      * under [trackSwapLock]; the old native track is stopped/released off
      * the swap path so the playback loop never blocks on teardown (same
@@ -1304,7 +1337,13 @@ class AudioBridge(
                     headWatchSince = 0L
                     framesSinceHeadMove = 0L
                 }
-                val head = trackNow?.playbackHeadPosition?.toLong() ?: 0L
+                if (trackNow == null) {
+                    // Route switch window: the media track is released and the
+                    // new one is still being built — nothing to write into
+                    playbackWake.poll(10, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    continue
+                }
+                val head = trackNow.playbackHeadPosition.toLong()
                 // Track-rate aware depth: the comm voice track runs at the
                 // headset rate (16 kHz), the media track at 48 kHz
                 val trackRate = trackNow?.sampleRate ?: SAMPLE_RATE

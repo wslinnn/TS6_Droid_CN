@@ -66,6 +66,17 @@ class AudioRouteManager(
          * `comm=false` always means "back to the media path".
          */
         suspend fun onRouteChanged(comm: Boolean, deviceName: String?)
+
+        /**
+         * Called right before the communication route is applied: the
+         * receiver must stop media playback so A2DP is idle while SCO starts.
+         * A headset still receiving A2DP audio keeps its audio path in music
+         * mode and will not switch to HFP — SCO connects but stays silent.
+         */
+        suspend fun onCommRoutePrepare() {}
+
+        /** The comm route did not come up: rebuild the media path. */
+        suspend fun onCommRouteAborted() {}
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -255,8 +266,20 @@ class AudioRouteManager(
         val name = btDevice.productName?.toString().orEmpty()
             .ifEmpty { "Bluetooth headset" }
         Log.i(TAG, "Bluetooth headset connected (${btDevice.typeName()}): entering comm route")
+        // A2DP must be idle before SCO starts, otherwise the headset never
+        // leaves music mode and the SCO audio path stays down
+        try {
+            listener.onCommRoutePrepare()
+        } catch (t: Throwable) {
+            Log.w(TAG, "Comm route prepare failed (continuing)", t)
+        }
         if (!enterCommRoute(btDevice)) {
             Log.w(TAG, "Comm route failed (SCO did not come up); staying on media path")
+            try {
+                listener.onCommRouteAborted()
+            } catch (t: Throwable) {
+                Log.w(TAG, "Media restore after failed comm route failed", t)
+            }
             commBlockedUntil = now + COMM_RETRY_COOLDOWN_MS
             return
         }
@@ -283,6 +306,9 @@ class AudioRouteManager(
     @SuppressLint("MissingPermission")
     private suspend fun enterCommRoute(device: AudioDeviceInfo): Boolean {
         return try {
+            // Give the audio policy a moment to tear the A2DP patch down
+            // after the listener released the media track
+            delay(COMM_PREPARE_SETTLE_MS)
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 // The framework applies the communication device
@@ -586,6 +612,9 @@ class AudioRouteManager(
 
         /** SCO must materialize as an input device within this window. */
         private const val SCO_START_TIMEOUT_MS = 5_000L
+
+        /** Settle window after media playback stops, before mode/SCO are applied. */
+        private const val COMM_PREPARE_SETTLE_MS = 300L
 
         /** setCommunicationDevice retry budget (async application + device-id refresh). */
         private const val SET_COMM_MAX_ATTEMPTS = 5
