@@ -1208,11 +1208,11 @@ class AudioBridge(
                 val head = trackNow?.playbackHeadPosition?.toLong() ?: 0L
                 val bufferedMs = (writtenFrames - head) * 1000 / SAMPLE_RATE
                 if (bufferedMs > trackBufPeakMs) trackBufPeakMs = bufferedMs
-                if (bufferedMs > TARGET_TRACK_BUFFER_MS) {
-                    playbackWake.poll(20, java.util.concurrent.TimeUnit.MILLISECONDS)
-                    continue
-                }
 
+                // Frozen-head watch runs BEFORE the over-buffer guard: a dead
+                // track makes the guard stall this loop itself (write counter
+                // frozen, head static), so a watch placed after the guard can
+                // never fire for exactly the case it must catch.
                 if (commRouteActive) {
                     val nowMs = SystemClock.elapsedRealtime()
                     if (head != headWatchValue) {
@@ -1254,6 +1254,11 @@ class AudioBridge(
                     headWatchValue = -1L
                     headWatchSince = 0L
                     framesSinceHeadMove = 0L
+                }
+
+                if (bufferedMs > TARGET_TRACK_BUFFER_MS) {
+                    playbackWake.poll(20, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    continue
                 }
 
                 // Talkspurt-start priming: hold the first frame(s) until a
