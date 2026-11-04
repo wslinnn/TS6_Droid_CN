@@ -88,11 +88,6 @@
     <string name="mic_mode_open">Micro ouvert</string>
     <string name="vad_threshold">Seuil de déclenchement : %1$d dB</string>
     <string name="vad_threshold_hint">Les niveaux au-dessus du seuil déclenchent la transmission. -45 dB convient à la plupart des environnements.</string>
-    <string name="capture_source">Source de capture</string>
-    <string name="capture_source_voice_communication">Standard</string>
-    <string name="capture_source_mic">Micro brut</string>
-    <string name="capture_source_voice_performance">Captation pure</string>
-    <string name="capture_source_hint">Tout le traitement audio est effectué par logiciel — la captation pure est la valeur par défaut ; les appareils antérieurs à Android 10 basculent sur le micro brut.</string>
 
     <string name="user_uid">ID unique</string>
     <string name="user_platform">Plateforme</string>

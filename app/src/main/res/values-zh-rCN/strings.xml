@@ -87,11 +87,6 @@
     <string name="mic_mode_open">开放麦克风</string>
     <string name="vad_threshold">触发阈值：%1$d dB</string>
     <string name="vad_threshold_hint">说话声高于阈值时自动发送。-45 dB 适合大多数环境。</string>
-    <string name="capture_source">采集源</string>
-    <string name="capture_source_voice_communication">标准</string>
-    <string name="capture_source_mic">原始麦克风</string>
-    <string name="capture_source_voice_performance">纯净采集</string>
-    <string name="capture_source_hint">音频处理全部由软件完成，默认纯净采集；Android 10 以下设备自动回退原始麦克风。</string>
 
     <string name="user_uid">唯一 ID</string>
     <string name="user_platform">平台</string>

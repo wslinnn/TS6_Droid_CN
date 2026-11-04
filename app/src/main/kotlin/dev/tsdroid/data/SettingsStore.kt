@@ -6,7 +6,6 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import dev.tsdroid.bridge.CaptureSource
 import dev.tsdroid.bridge.MicMode
 import dev.tsdroid.bridge.VadGate
 import kotlinx.coroutines.flow.Flow
@@ -21,7 +20,6 @@ private val KEY_AUTO_LOAD_IMAGES = booleanPreferencesKey("auto_load_images")
 private val KEY_LANGUAGE = stringPreferencesKey("language")
 private val KEY_ENABLE_FLOATING_WINDOW = booleanPreferencesKey("enable_floating_window")
 private val KEY_ANIME_BACKGROUND = booleanPreferencesKey("anime_background")
-private val KEY_CAPTURE_SOURCE = stringPreferencesKey("capture_source")
 // Legacy key: kept only to migrate pre-2.3 installs to KEY_MIC_MODE
 private val KEY_PTT_MODE = booleanPreferencesKey("ptt_mode")
 private val KEY_MIC_MODE = stringPreferencesKey("mic_mode")
@@ -89,14 +87,6 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setAnimeBackground(enabled: Boolean) {
         context.settingsDataStore.edit { it[KEY_ANIME_BACKGROUND] = enabled }
-    }
-
-    /** Microphone capture source (unprocessed / raw mic / platform voice pipeline). */
-    val captureSource: Flow<CaptureSource> = context.settingsDataStore.data
-        .map { CaptureSource.from(it[KEY_CAPTURE_SOURCE]) }
-
-    suspend fun setCaptureSource(source: CaptureSource) {
-        context.settingsDataStore.edit { it[KEY_CAPTURE_SOURCE] = source.raw }
     }
 
     /**

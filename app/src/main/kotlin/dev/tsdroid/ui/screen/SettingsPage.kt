@@ -40,7 +40,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.mikepenz.markdown.m3.Markdown
 import coil.compose.AsyncImage
-import dev.tsdroid.bridge.CaptureSource
 import dev.tsdroid.bridge.IdentityFileStore
 import dev.tsdroid.bridge.MicMode
 import dev.tsdroid.bridge.VadGate
@@ -433,7 +432,6 @@ fun AudioSection() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val settingsStore = remember { SettingsStore(context) }
-    val captureSource by settingsStore.captureSource.collectAsStateWithLifecycle(initialValue = CaptureSource.VOICE_PERFORMANCE)
     val micMode by settingsStore.micMode.collectAsStateWithLifecycle(initialValue = MicMode.PTT)
     val vadThreshold by settingsStore.vadThresholdDb.collectAsStateWithLifecycle(initialValue = VadGate.DEFAULT_THRESHOLD_DB)
     val audioGain by settingsStore.audioGain.collectAsStateWithLifecycle(initialValue = 1.0f)
@@ -478,43 +476,6 @@ fun AudioSection() {
                     onValueChangeFinished = { scope.launch { settingsStore.setMicGain(micGainValue) } },
                     valueRange = 0.0f..4.0f,
                     steps = 15,
-                )
-            }
-
-            // 采集源：切换在下次开始采集（重连）后生效
-            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                Text(
-                    text = stringResource(R.string.capture_source),
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    FilterChip(
-                        selected = captureSource == CaptureSource.VOICE_COMMUNICATION,
-                        onClick = { scope.launch { settingsStore.setCaptureSource(CaptureSource.VOICE_COMMUNICATION) } },
-                        label = { Text(stringResource(R.string.capture_source_voice_communication)) },
-                    )
-                    FilterChip(
-                        selected = captureSource == CaptureSource.MIC,
-                        onClick = { scope.launch { settingsStore.setCaptureSource(CaptureSource.MIC) } },
-                        label = { Text(stringResource(R.string.capture_source_mic)) },
-                    )
-                    FilterChip(
-                        selected = captureSource == CaptureSource.VOICE_PERFORMANCE,
-                        onClick = { scope.launch { settingsStore.setCaptureSource(CaptureSource.VOICE_PERFORMANCE) } },
-                        label = { Text(stringResource(R.string.capture_source_voice_performance)) },
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = stringResource(R.string.capture_source_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 

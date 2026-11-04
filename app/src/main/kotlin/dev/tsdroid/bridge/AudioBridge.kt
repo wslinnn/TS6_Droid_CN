@@ -203,9 +203,8 @@ class AudioBridge(
      */
     private val captureSwapLock = Any()
 
-    /** Requested capture source for the next recorder (re-evaluated per rebuild). */
-    @Volatile
-    private var captureSourcePref = CaptureSource.VOICE_PERFORMANCE
+    /** Fixed capture source: unprocessed low-latency input for the software DSP chain. */
+    private val captureSource = CaptureSource.VOICE_PERFORMANCE
 
     /**
      * Monotonic timestamp of the last **non-silent** mic data (a partial
@@ -368,10 +367,7 @@ class AudioBridge(
     }
 
     @SuppressLint("MissingPermission")
-    fun startCapture(
-        scope: CoroutineScope,
-        captureSource: CaptureSource = CaptureSource.VOICE_PERFORMANCE,
-    ) {
+    fun startCapture(scope: CoroutineScope) {
         if (_isCapturing.value) return
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
@@ -380,12 +376,6 @@ class AudioBridge(
             return
         }
 
-        // Apply the capture preferences BEFORE creating the recorder: the
-        // source setting must govern this very capture. (These used to be
-        // assigned after createAudioRecord, so a settings change took effect
-        // one session late — the stale source silently ran until the first
-        // rebuild swapped it, making the capture intermittently mute.)
-        captureSourcePref = captureSource
         val record = createAudioRecord() ?: return
         audioRecord = record
         _isCapturing.value = true
@@ -664,8 +654,8 @@ class AudioBridge(
         // source as the last resort: the all-software pipeline wants an
         // unprocessed signal (vendor voice chains nonlinearly process the
         // echo path), and a silent fallback beats a dead capture loop
-        val requested = captureSourcePref.resolveSourceId()
-        Log.i(TAG, "Capture source: ${captureSourcePref.raw} (id=$requested)")
+        val requested = captureSource.resolveSourceId()
+        Log.i(TAG, "Capture source: ${captureSource.raw} (id=$requested)")
         return tryCreateAudioRecord(requested, minBuf)
             ?: if (requested != MediaRecorder.AudioSource.MIC) {
                 tryCreateAudioRecord(MediaRecorder.AudioSource.MIC, minBuf)

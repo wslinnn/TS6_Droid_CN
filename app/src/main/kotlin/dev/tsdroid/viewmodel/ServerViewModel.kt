@@ -19,7 +19,6 @@ import androidx.lifecycle.viewModelScope
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.tsdroid.bridge.AvatarCache
 import dev.tsdroid.bridge.AudioBridge
-import dev.tsdroid.bridge.CaptureSource
 import dev.tsdroid.bridge.FileCache
 import dev.tsdroid.bridge.IconCache
 import dev.tsdroid.bridge.MicMode
@@ -289,9 +288,6 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     val animeBackground: StateFlow<Boolean> = settingsStore.animeBackground
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    val captureSource: StateFlow<CaptureSource> = settingsStore.captureSource
-        .stateIn(viewModelScope, SharingStarted.Eagerly, CaptureSource.VOICE_PERFORMANCE)
-
     // File manager state
     private val _fileManagerOpen = MutableStateFlow(false)
     val fileManagerOpen: StateFlow<Boolean> = _fileManagerOpen.asStateFlow()
@@ -500,7 +496,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             }
             // Start audio capture if not already running
             if (!service.audioBridge.isCapturing.value) {
-                service.audioBridge.startCapture(viewModelScope, captureSource.value)
+                service.audioBridge.startCapture(viewModelScope)
             }
             // Apply persisted audio gain
             service.audioBridge.gainFactor = audioGain.value
