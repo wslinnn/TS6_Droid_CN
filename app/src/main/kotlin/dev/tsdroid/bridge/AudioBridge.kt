@@ -139,6 +139,17 @@ class AudioBridge(
 
         /** How long the rebuilt voice track gets to report a real routed device. */
         private const val COMM_ROUTE_VERIFY_MS = 1_200L
+
+        /**
+         * Diagnostic route probe (debug builds only): write a continuous soft
+         * tone into a freshly switched comm track. Far-end audio is usually
+         * sparse right after a headset connects, and a track fed one 20 ms
+         * frame every few seconds cannot prove whether the SCO output
+         * consumes at all. The tone answers that in the log and in the ear.
+         */
+        private const val COMM_PROBE_MS = 3_000L
+        private const val COMM_PROBE_HZ = 440.0
+        private const val COMM_PROBE_AMPLITUDE = 2_000.0 // ~-24 dBFS
     }
 
     private val audioConfig = AudioConfig()
@@ -304,6 +315,14 @@ class AudioBridge(
     /** True while track and recorder are built for the communication route. */
     @Volatile
     private var commRouteActive = false
+
+    /** Diagnostic tone window after a comm-route switch (debug builds only). */
+    private var commProbeUntil = 0L
+    private var commProbePhase = 0.0
+
+    /** Debug APKs get the route probe; release builds never emit the tone. */
+    private val isDebuggable: Boolean =
+        (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
     /**
      * Which voice-track construction the comm route is currently using.
@@ -1123,6 +1142,11 @@ class AudioBridge(
                 delay(COMM_TRACK_SETTLE_MS)
             }
             rebuildTrackForRoute(comm)
+            if (comm && isDebuggable) {
+                commProbeUntil = SystemClock.elapsedRealtime() + COMM_PROBE_MS
+                commProbePhase = 0.0
+                Log.i(TAG, "Comm route probe armed (${COMM_PROBE_MS}ms ${COMM_PROBE_HZ.toInt()}Hz tone)")
+            }
             if (_isCapturing.value) {
                 val scope = captureScope
                 if (scope != null) {
@@ -1257,6 +1281,17 @@ class AudioBridge(
                     flushAudioDiag()
                 }
 
+                if (commProbeUntil != 0L && SystemClock.elapsedRealtime() >= commProbeUntil) {
+                    val probeTrack = synchronized(trackSwapLock) { audioTrack }
+                    Log.i(
+                        TAG,
+                        "Comm route probe done: head=${probeTrack?.playbackHeadPosition ?: -1} " +
+                            "playState=${probeTrack?.playState ?: -1} " +
+                            "underruns=${probeTrack?.underrunCount ?: -1}",
+                    )
+                    commProbeUntil = 0L
+                }
+
                 // Write-side latency watermark: AudioTrack drains in real
                 // time while this loop writes at decode pace — without a cap,
                 // any burst piles up inside the track buffer and lingers as
@@ -1388,6 +1423,22 @@ class AudioBridge(
                         diag.fecRepaired++
                     }
                     if (queue.size > diag.queuePeak) diag.queuePeak = queue.size
+                }
+
+                if (isDebuggable && commRouteActive &&
+                    SystemClock.elapsedRealtime() < commProbeUntil
+                ) {
+                    // Diagnostic-only: continuous tone so the SCO output has
+                    // data to consume even while the far end is quiet
+                    val step = 2.0 * Math.PI * COMM_PROBE_HZ / SAMPLE_RATE
+                    for (i in mixBuffer.indices) {
+                        mixBuffer[i] = (Math.sin(commProbePhase + i * step) * COMM_PROBE_AMPLITUDE)
+                            .toInt()
+                            .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                            .toShort()
+                    }
+                    commProbePhase = (commProbePhase + mixBuffer.size * step) % (2.0 * Math.PI)
+                    hasData = true
                 }
 
                 if (hasData) {
