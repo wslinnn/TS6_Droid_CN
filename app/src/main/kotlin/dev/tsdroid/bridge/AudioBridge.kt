@@ -74,6 +74,18 @@ class AudioBridge(
         private const val FRAME_SIZE_MS = 20
         private const val FRAME_SIZE_SAMPLES = SAMPLE_RATE * FRAME_SIZE_MS / 1000 // 960
         private const val FRAME_SIZE_BYTES = FRAME_SIZE_SAMPLES * 2 // 16-bit PCM = 2 bytes/sample
+
+        /**
+         * SCO carries voice at the headset rate (CVSD 8 kHz / mSBC 16 kHz).
+         * Several HALs only advertise 8/16 kHz for the voice-call output, so a
+         * 48 kHz voice track lands on a stream the SCO path never consumes:
+         * head frozen at 0 with zero underruns while the track is routed to
+         * the headset. Talk to the headset at 16 kHz and resample locally.
+         */
+        private const val COMM_SAMPLE_RATE = 16_000
+        private const val COMM_RESAMPLE_FACTOR = SAMPLE_RATE / COMM_SAMPLE_RATE // 3
+        private const val COMM_FRAME_SAMPLES = FRAME_SIZE_SAMPLES / COMM_RESAMPLE_FACTOR // 320
+        private const val COMM_FRAME_BYTES = COMM_FRAME_SAMPLES * 2
         // Backstop cap — the write-side watermark bounds latency first; this
         // only kicks in for arrival bursts (e.g. VAD pre-roll dumps)
         private const val MAX_QUEUE_FRAMES = 6
@@ -977,6 +989,8 @@ class AudioBridge(
         } else {
             AudioAttributes.USAGE_GAME
         }
+        val rate = if (commRoute) COMM_SAMPLE_RATE else SAMPLE_RATE
+        val frameBytes = if (commRoute) COMM_FRAME_BYTES else FRAME_SIZE_BYTES
         val builder = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -987,11 +1001,11 @@ class AudioBridge(
             .setAudioFormat(
                 AudioFormat.Builder()
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(SAMPLE_RATE)
+                    .setSampleRate(rate)
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build()
             )
-            .setBufferSizeInBytes(maxOf(minBuf, FRAME_SIZE_BYTES * TRACK_BUFFER_FRAMES))
+            .setBufferSizeInBytes(maxOf(minBuf, frameBytes * TRACK_BUFFER_FRAMES))
         if (lowLatency) {
             builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
         }
@@ -1006,11 +1020,13 @@ class AudioBridge(
      * the released track — the loop catches that and re-reads the field.
      */
     private fun rebuildTrackForRoute(commRoute: Boolean) {
+        val rate = if (commRoute) COMM_SAMPLE_RATE else SAMPLE_RATE
         val minBuf = AudioTrack.getMinBufferSize(
-            SAMPLE_RATE,
+            rate,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
         )
+        if (commRoute) resetCommResampler()
         val old = synchronized(trackSwapLock) {
             val t = audioTrack
             audioTrack = null
@@ -1070,10 +1086,10 @@ class AudioBridge(
     private fun buildLegacyVoiceTrack(minBuf: Int): AudioTrack {
         return AudioTrack(
             AudioManager.STREAM_VOICE_CALL,
-            SAMPLE_RATE,
+            COMM_SAMPLE_RATE,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
-            maxOf(minBuf, FRAME_SIZE_BYTES * TRACK_BUFFER_FRAMES),
+            maxOf(minBuf, COMM_FRAME_BYTES * TRACK_BUFFER_FRAMES),
             AudioTrack.MODE_STREAM,
         )
     }
@@ -1179,6 +1195,7 @@ class AudioBridge(
         playbackJob = playbackScope.launch {
             val mixBuffer = ShortArray(FRAME_SIZE_SAMPLES)
             val decodeBuffer = ShortArray(FRAME_SIZE_SAMPLES)
+            val commBuffer = ShortArray(COMM_FRAME_SAMPLES)
             // Total PCM frames handed to AudioTrack — compared against
             // playbackHeadPosition to measure the track's buffered depth.
             // Reset whenever the track instance changes: a fresh track's
@@ -1253,7 +1270,10 @@ class AudioBridge(
                     framesSinceHeadMove = 0L
                 }
                 val head = trackNow?.playbackHeadPosition?.toLong() ?: 0L
-                val bufferedMs = (writtenFrames - head) * 1000 / SAMPLE_RATE
+                // Track-rate aware depth: the comm voice track runs at the
+                // headset rate (16 kHz), the media track at 48 kHz
+                val trackRate = trackNow?.sampleRate ?: SAMPLE_RATE
+                val bufferedMs = (writtenFrames - head) * 1000 / trackRate
                 if (bufferedMs > trackBufPeakMs) trackBufPeakMs = bufferedMs
 
                 // Frozen-head watch runs BEFORE the over-buffer guard: a dead
@@ -1379,8 +1399,16 @@ class AudioBridge(
                             mixBuffer[i] = softClip(mixBuffer[i] * gain)
                         }
                     }
-                    val bytes = shortsToBytes(mixBuffer)
                     val track = synchronized(trackSwapLock) { audioTrack }
+                    // Comm voice track runs at the headset rate: decimate the
+                    // 48 kHz mix instead of handing the HAL a rate it will not
+                    // carry over SCO
+                    val bytes = if (track != null && track.sampleRate == COMM_SAMPLE_RATE) {
+                        downmixToComm(mixBuffer, commBuffer)
+                        shortsToBytes(commBuffer, COMM_FRAME_SAMPLES)
+                    } else {
+                        shortsToBytes(mixBuffer)
+                    }
                     val written = try {
                         track?.write(bytes, 0, bytes.size) ?: -1
                     } catch (t: IllegalStateException) {
@@ -1398,9 +1426,10 @@ class AudioBridge(
                             Log.w(TAG, "AudioTrack.write returned $written of ${bytes.size}")
                         }
                     }
-                    writtenFrames += FRAME_SIZE_SAMPLES
-                    framesSinceHeadMove += FRAME_SIZE_SAMPLES
-                    playbackWritesTotal += FRAME_SIZE_SAMPLES
+                    val framesWritten = bytes.size / 2
+                    writtenFrames += framesWritten
+                    framesSinceHeadMove += framesWritten
+                    playbackWritesTotal += framesWritten
                     // AEC reference: exactly the PCM handed to the speaker
                     // (post-gain, post-duck, post-softClip) — feeding the raw
                     // mix pre-DUCK would feed a distorted reference.
@@ -1604,6 +1633,7 @@ class AudioBridge(
                     "suspended=$outputSuspendedByFocus ducked=$duckedByFocus " +
                     "route=${if (commRouteActive) "comm" else "media"} commDev=$commDevType " +
                     "sco=${routeManager.scoStateLabel()} trackRoute=$trackRouteType " +
+                    "rate=${outTrack?.sampleRate ?: -1} " +
                     "variant=$commTrackVariant " +
                     "discard[susp=$discardSuspended outMuted=$discardOutputMuted gain0=$discardGainZero userMuted=$discardMutedUser] " +
                     "writeFail=$writeFailCount",
@@ -1676,9 +1706,76 @@ class AudioBridge(
         queueDelaySampleCount++
     }
 
-    private fun shortsToBytes(shorts: ShortArray): ByteArray {
-        val bytes = ByteArray(shorts.size * 2)
-        for (i in shorts.indices) {
+    // 48 kHz → 16 kHz anti-alias for the SCO voice track: two cascaded
+    // 2nd-order low-passes at 7 kHz, then keep every third sample. State is
+    // owned by the single playback thread.
+    private val commLp1 = Biquad(7_000.0, SAMPLE_RATE)
+    private val commLp2 = Biquad(7_000.0, SAMPLE_RATE)
+
+    private fun resetCommResampler() {
+        commLp1.reset()
+        commLp2.reset()
+    }
+
+    /** Low-pass the 48 kHz mix and decimate by 3 → one 16 kHz voice frame. */
+    private fun downmixToComm(src: ShortArray, dst: ShortArray) {
+        var out = 0
+        for (i in src.indices) {
+            val y = commLp2.process(commLp1.process(src[i].toFloat()))
+            if (i % COMM_RESAMPLE_FACTOR == 0 && out < dst.size) {
+                dst[out++] = y.toInt()
+                    .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                    .toShort()
+            }
+        }
+        while (out < dst.size) dst[out++] = 0
+    }
+
+    /** RBJ-cookbook biquad low-pass (mono, single writer). */
+    private class Biquad(cutoffHz: Double, sampleRate: Int) {
+        private val b0: Float
+        private val b1: Float
+        private val b2: Float
+        private val a1: Float
+        private val a2: Float
+        private var x1 = 0f
+        private var x2 = 0f
+        private var y1 = 0f
+        private var y2 = 0f
+
+        init {
+            val w0 = 2.0 * Math.PI * cutoffHz / sampleRate
+            val cosW = Math.cos(w0)
+            val alpha = Math.sin(w0) / (2.0 * Math.sqrt(0.5)) // Q = 0.707
+            val a0 = 1.0 + alpha
+            b0 = (((1.0 - cosW) / 2.0) / a0).toFloat()
+            b1 = ((1.0 - cosW) / a0).toFloat()
+            b2 = b0
+            a1 = ((-2.0 * cosW) / a0).toFloat()
+            a2 = ((1.0 - alpha) / a0).toFloat()
+        }
+
+        fun process(x: Float): Float {
+            val y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+            x2 = x1
+            x1 = x
+            y2 = y1
+            y1 = y
+            return y
+        }
+
+        fun reset() {
+            x1 = 0f
+            x2 = 0f
+            y1 = 0f
+            y2 = 0f
+        }
+    }
+
+    private fun shortsToBytes(shorts: ShortArray, length: Int = shorts.size): ByteArray {
+        val n = length.coerceIn(0, shorts.size)
+        val bytes = ByteArray(n * 2)
+        for (i in 0 until n) {
             bytes[i * 2] = (shorts[i].toInt() and 0xFF).toByte()
             bytes[i * 2 + 1] = (shorts[i].toInt() shr 8 and 0xFF).toByte()
         }
