@@ -1134,14 +1134,18 @@ class AudioBridge(
             var writtenFrames = 0L
             var currentTrack: AudioTrack? = null
 
-            // Frozen-head watch ("dead track" fingerprint): while frames
-            // keep being written the head must advance. A static head under
-            // sustained writes for longer than the timeout in the comm route
-            // means the track is not consuming — force the media fallback
-            // instead of dying silently (the 2026-10-13 failure mode).
+            // Frozen-head watch ("dead track" fingerprint). A healthy track
+            // consumes every frame promptly, so: at least one frame written
+            // since the head last advanced, and the head still static after
+            // the timeout = dead. Deliberately NO recency-of-write
+            // requirement — a dead track lets the loop stall on the
+            // over-buffer guard, which itself stops the writes and used to
+            // make this check unable to ever fire again (ladder got stuck).
+            // No writes since the head last moved (idle, nothing playing)
+            // is a healthy static head and never trips.
             var headWatchValue = -1L
             var headWatchSince = 0L
-            var lastWriteAt = 0L
+            var framesSinceHeadMove = 0L
 
             // Sum one decoded frame into the mix buffer with per-user gain
             fun mixIn(userId: Int, pcm: ByteArray): Boolean {
@@ -1190,6 +1194,9 @@ class AudioBridge(
                 if (trackNow !== currentTrack) {
                     currentTrack = trackNow
                     writtenFrames = 0L
+                    headWatchValue = -1L
+                    headWatchSince = 0L
+                    framesSinceHeadMove = 0L
                 }
                 val head = trackNow?.playbackHeadPosition?.toLong() ?: 0L
                 val bufferedMs = (writtenFrames - head) * 1000 / SAMPLE_RATE
@@ -1204,13 +1211,12 @@ class AudioBridge(
                     if (head != headWatchValue) {
                         headWatchValue = head
                         headWatchSince = nowMs
+                        framesSinceHeadMove = 0L
                     } else if (headWatchSince != 0L &&
-                        nowMs - headWatchSince > FROZEN_HEAD_TIMEOUT_MS &&
-                        nowMs - lastWriteAt < 1000
+                        framesSinceHeadMove > 0 &&
+                        nowMs - headWatchSince > FROZEN_HEAD_TIMEOUT_MS
                     ) {
-                        headWatchValue = -1L
-                        headWatchSince = 0L
-                        val trackNow = synchronized(trackSwapLock) { audioTrack }
+                        val trackRef = trackNow
                         if (commTrackVariant < COMM_TRACK_VARIANT_COUNT - 1) {
                             // Dead track on this ROM — walk the construction
                             // ladder before surrendering the headset
@@ -1218,7 +1224,8 @@ class AudioBridge(
                             Log.w(
                                 TAG,
                                 "Comm track not consuming (head=$head writes=$playbackWritesTotal " +
-                                    "playState=${trackNow?.playState ?: -1} underruns=${trackNow?.underrunCount ?: -1}); " +
+                                    "framesSinceMove=$framesSinceHeadMove " +
+                                    "playState=${trackRef?.playState ?: -1} underruns=${trackRef?.underrunCount ?: -1}); " +
                                     "retrying variant $commTrackVariant",
                             )
                             rebuildTrackForRoute(commRoute = true)
@@ -1226,15 +1233,20 @@ class AudioBridge(
                             Log.e(
                                 TAG,
                                 "All comm track variants dead (head=$head writes=$playbackWritesTotal " +
-                                    "playState=${trackNow?.playState ?: -1} underruns=${trackNow?.underrunCount ?: -1}) " +
+                                    "framesSinceMove=$framesSinceHeadMove " +
+                                    "playState=${trackRef?.playState ?: -1} underruns=${trackRef?.underrunCount ?: -1}) " +
                                     "— forcing media fallback",
                             )
                             routeManager.forceMediaFallback("playback head frozen (comm track)")
                         }
+                        headWatchValue = -1L
+                        headWatchSince = 0L
+                        framesSinceHeadMove = 0L
                     }
                 } else {
                     headWatchValue = -1L
                     headWatchSince = 0L
+                    framesSinceHeadMove = 0L
                 }
 
                 // Talkspurt-start priming: hold the first frame(s) until a
@@ -1328,8 +1340,8 @@ class AudioBridge(
                         }
                     }
                     writtenFrames += FRAME_SIZE_SAMPLES
+                    framesSinceHeadMove += FRAME_SIZE_SAMPLES
                     playbackWritesTotal += FRAME_SIZE_SAMPLES
-                    lastWriteAt = SystemClock.elapsedRealtime()
                     // AEC reference: exactly the PCM handed to the speaker
                     // (post-gain, post-duck, post-softClip) — feeding the raw
                     // mix pre-DUCK would feed a distorted reference.
