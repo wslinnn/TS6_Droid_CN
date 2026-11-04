@@ -124,6 +124,9 @@ class AudioBridge(
 
         /** Let the async audio-policy apply the mode/device switch before building the voice track. */
         private const val COMM_TRACK_SETTLE_MS = 400L
+
+        /** How long the rebuilt voice track gets to report a real routed device. */
+        private const val COMM_ROUTE_VERIFY_MS = 1_200L
     }
 
     private val audioConfig = AudioConfig()
@@ -280,7 +283,7 @@ class AudioBridge(
     private val trackSwapLock = Any()
 
     /** Bluetooth communication-route plumbing + audio-device watching. */
-    private val routeManager = AudioRouteManager(audioManager, object : AudioRouteManager.Listener {
+    private val routeManager = AudioRouteManager(context, audioManager, object : AudioRouteManager.Listener {
         override suspend fun onRouteChanged(comm: Boolean, deviceName: String?) {
             applyRoute(comm, deviceName)
         }
@@ -1114,7 +1117,51 @@ class AudioBridge(
         } finally {
             suspendOutput(false)
         }
+        if (!comm) return
+        // Platform truth check: the voice track must actually be attached to
+        // the headset. A track the policy routed anywhere else reproduces the
+        // "silent headset" bug while setCommunicationDevice() still returns
+        // true. Route attachment happens on the first writes, so verify after
+        // the output window reopened.
+        val routed = awaitTrackRoute(COMM_ROUTE_VERIFY_MS)
+        when {
+            routed == null -> Log.w(
+                TAG,
+                "Comm track route unknown after ${COMM_ROUTE_VERIFY_MS}ms " +
+                    "(no audio written yet); frozen-head watchdog stays armed",
+            )
+            !isCommAudioDevice(routed) -> {
+                val reason = "comm track routed to type=${routed.type} instead of the headset"
+                Log.e(TAG, reason)
+                routeManager.forceMediaFallback(reason)
+            }
+            else -> Log.i(
+                TAG,
+                "Comm track routed to type=${routed.type} name=${routed.productName}",
+            )
+        }
     }
+
+    /** Poll the live track's actual route; null while the policy has not attached one yet. */
+    private suspend fun awaitTrackRoute(timeoutMs: Long): AudioDeviceInfo? {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val track = synchronized(trackSwapLock) { audioTrack }
+            val routed = try {
+                track?.routedDevice
+            } catch (_: Throwable) {
+                null
+            }
+            if (routed != null) return routed
+            delay(100)
+        }
+        return null
+    }
+
+    private fun isCommAudioDevice(device: AudioDeviceInfo): Boolean =
+        device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                device.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
 
     /**
      * Playback loop: decodes one opus frame per user, conceals detected
@@ -1506,11 +1553,19 @@ class AudioBridge(
             // san0 = blow-up-guard zeroed frames this window (a 20 ms hole
             // each); -1 means no live AEC or a pre-counter native library
             val sanDelta = readEchoZeroedDelta()
+            // Real capture route as reported by the framework (-1 unknown):
+            // distinguishes the headset mic from a silent fallback to the
+            // phone mic, which our own bookkeeping cannot tell apart
+            val recRouteType = try {
+                audioRecord?.routedDevice?.type ?: -1
+            } catch (_: Throwable) {
+                -1
+            }
             Log.i(
                 TAG,
                 "AudioEnc 30s: n=${samples.size} p95=${p95}us max=${samples.last()}us " +
                     "(budget 20000us) micGain=$micGainFactor mode=$micMode vadDb=$vadThresholdDb " +
-                    "route=${if (commRouteActive) "comm" else "media"} " +
+                    "route=${if (commRouteActive) "comm" else "media"} recRoute=$recRouteType " +
                     "callVol=${audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL)} " +
                     "san0=${if (sanDelta < 0) "n/a" else sanDelta} " +
                     "encFail=$encFailCount sendFail=$sendFailCount",
@@ -1530,6 +1585,13 @@ class AudioBridge(
             } else {
                 -1
             }
+            // Actual playback route (not our intent): the voice track must be
+            // attached to the headset for any of this to be audible
+            val trackRouteType = try {
+                outTrack?.routedDevice?.type ?: -1
+            } catch (_: Throwable) {
+                -1
+            }
             Log.i(
                 TAG,
                 "AudioOut 30s: trackBufPeak=${trackBufPeakMs}ms (target ${TARGET_TRACK_BUFFER_MS}ms) " +
@@ -1541,6 +1603,7 @@ class AudioBridge(
                     "mode=${audioManager.mode} " +
                     "suspended=$outputSuspendedByFocus ducked=$duckedByFocus " +
                     "route=${if (commRouteActive) "comm" else "media"} commDev=$commDevType " +
+                    "sco=${routeManager.scoStateLabel()} trackRoute=$trackRouteType " +
                     "variant=$commTrackVariant " +
                     "discard[susp=$discardSuspended outMuted=$discardOutputMuted gain0=$discardGainZero userMuted=$discardMutedUser] " +
                     "writeFail=$writeFailCount",

@@ -145,7 +145,18 @@ fun ConnectionScreen(
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { }
+    ) { result ->
+        // BLUETOOTH_CONNECT 不是可选项：缺授权时部分 ROM 会接受
+        // setCommunicationDevice() 却从不建立 SCO，耳机麦/听音静默退回手机侧。
+        // 明确告知用户，而不是背后降级
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            result[Manifest.permission.BLUETOOTH_CONNECT] == false
+        ) {
+            scope.launch {
+                snackbarHostState.showSnackbar(context.getString(R.string.bluetooth_permission_missing))
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)

@@ -1,11 +1,18 @@
 package dev.tsdroid.bridge
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
 import android.os.SystemClock
+import androidx.core.content.ContextCompat
 import dev.tsdroid.data.AppLog as Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +55,7 @@ sealed class AudioRouteState {
  *   coroutine; failures inside the listener never wedge the manager.
  */
 class AudioRouteManager(
+    private val context: Context,
     private val audioManager: AudioManager,
     private val listener: Listener,
 ) {
@@ -68,6 +76,19 @@ class AudioRouteManager(
     private var deviceCallback: AudioDeviceCallback? = null
     private var evaluateJob: Job? = null
     private var legacyScoReceiverRegistered = false
+
+    /**
+     * Latest SCO audio state reported by the framework. On Android 12+ the
+     * SCO device is enumerated as soon as HFP connects, so "a SCO device
+     * exists" is not proof that SCO audio is up — only CONNECTED (or the
+     * platform's own `isBluetoothScoOn` flag) is.
+     */
+    @Volatile
+    private var scoAudioState = AudioManager.SCO_AUDIO_STATE_DISCONNECTED
+    /** False until the framework reports (or the sticky broadcast carries) any SCO state. */
+    @Volatile
+    private var scoStateSeen = false
+    private var scoReceiver: BroadcastReceiver? = null
 
     /** Currently applied communication device (null on the media path). */
     @Volatile
@@ -105,14 +126,20 @@ class AudioRouteManager(
             }
         }
         audioManager.registerAudioDeviceCallback(deviceCallback, null)
+        registerScoReceiver()
         // Catch headsets that were already connected before start()
         scheduleEvaluate()
-        Log.i(TAG, "AudioRouteManager started (api=${Build.VERSION.SDK_INT})")
+        Log.i(
+            TAG,
+            "AudioRouteManager started (api=${Build.VERSION.SDK_INT}, " +
+                "btConnectPerm=${hasBluetoothConnectPermission()}, sco=${scoStateName(scoAudioState)})",
+        )
     }
 
     fun stop() {
         deviceCallback?.let { audioManager.unregisterAudioDeviceCallback(it) }
         deviceCallback = null
+        unregisterScoReceiver()
         scope.cancel()
     }
 
@@ -188,6 +215,19 @@ class AudioRouteManager(
     }
 
     private suspend fun evaluate() {
+        if (!hasBluetoothConnectPermission()) {
+            // API 31+: with BLUETOOTH_CONNECT denied some ROMs still accept
+            // setCommunicationDevice() and then refuse to start SCO for this
+            // uid — the route reads back as applied while no audio flows.
+            // Never enter a route we cannot verify.
+            if (appliedCommDevice != null) {
+                Log.w(TAG, "Bluetooth permission lost; reverting to media route")
+                exitCommRoute()
+                deliverRoute(comm = false, deviceName = null)
+            }
+            Log.e(TAG, "BLUETOOTH_CONNECT not granted; staying on the media route")
+            return
+        }
         val btDevice = findBluetoothCommDevice()
         val now = SystemClock.elapsedRealtime()
 
@@ -283,14 +323,18 @@ class AudioRouteManager(
                 audioManager.isBluetoothScoOn = true
                 appliedCommDevice = device
             }
-            if (!waitForScoInput(SCO_START_TIMEOUT_MS)) {
-                Log.w(TAG, "SCO input device did not appear within ${SCO_START_TIMEOUT_MS}ms")
+            if (!waitForScoConnection(SCO_START_TIMEOUT_MS)) {
+                Log.w(TAG, "SCO did not connect within ${SCO_START_TIMEOUT_MS}ms; staying on media path")
                 exitCommRoute()
                 return false
             }
             ensureCallVolumeNotMuted()
             startCommWatch()
-            Log.i(TAG, "Comm route up: mode=IN_COMMUNICATION dev=${device.typeName()}")
+            Log.i(
+                TAG,
+                "Comm route up: mode=IN_COMMUNICATION dev=${device.typeName()} " +
+                    "sco=${scoStateName(scoAudioState)}",
+            )
             true
         } catch (t: Throwable) {
             Log.e(TAG, "enterCommRoute failed", t)
@@ -337,7 +381,7 @@ class AudioRouteManager(
                 } else {
                     applied // legacy path has no readable communication device
                 }
-                val scoPresent = scoInputDevice() != null
+                val scoPresent = scoInputDevice() != null && isScoConnected()
                 if (current?.id == applied.id && scoPresent) {
                     lostStreak = 0
                     continue
@@ -346,7 +390,7 @@ class AudioRouteManager(
                 Log.w(
                     TAG,
                     "Comm route drift (dev=${current?.let { it.typeName() } ?: "none"}, " +
-                        "sco=$scoPresent, streak=$lostStreak)",
+                        "sco=${scoStateName(scoAudioState)}, up=$scoPresent, streak=$lostStreak)",
                 )
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     val fresh = findBluetoothCommDevice()
@@ -403,15 +447,111 @@ class AudioRouteManager(
         }
     }
 
-    /** Poll for the SCO input device; it only exists once SCO is established. */
-    private suspend fun waitForScoInput(timeoutMs: Long): Boolean {
+    /**
+     * Wait until the framework reports SCO audio up (state broadcast CONNECTED
+     * or the platform's own isBluetoothScoOn flag) **and** the SCO input
+     * device exists. Device presence alone is not proof on Android 12+: the
+     * SCO device is enumerated when HFP connects, and a voice track created in
+     * that window initializes fine but is never consumed by the HAL.
+     */
+    private suspend fun waitForScoConnection(timeoutMs: Long): Boolean {
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
         while (SystemClock.elapsedRealtime() < deadline) {
-            if (scoInputDevice() != null) return true
-            delay(200)
+            if (isScoConnected() && scoInputDevice() != null) return true
+            delay(100)
         }
-        return scoInputDevice() != null
+        Log.w(
+            TAG,
+            "SCO still not up after ${timeoutMs}ms " +
+                "(state=${scoStateName(scoAudioState)}, seen=$scoStateSeen, " +
+                "scoOn=${isBluetoothScoOn()}, input=${scoInputDevice() != null})",
+        )
+        return isScoConnected() && scoInputDevice() != null
     }
+
+    @Suppress("DEPRECATION")
+    private fun registerScoReceiver() {
+        if (scoReceiver != null) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                val state = intent.getIntExtra(
+                    AudioManager.EXTRA_SCO_AUDIO_STATE,
+                    AudioManager.SCO_AUDIO_STATE_ERROR,
+                )
+                scoAudioState = state
+                scoStateSeen = true
+                Log.i(TAG, "SCO audio state: ${scoStateName(state)}")
+            }
+        }
+        scoReceiver = receiver
+        // The broadcast is sticky: the returned intent carries the state as of
+        // registration (e.g. a SCO link already up before we started watching)
+        val sticky = ContextCompat.registerReceiver(
+            context,
+            receiver,
+            IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        sticky?.let {
+            val state = it.getIntExtra(
+                AudioManager.EXTRA_SCO_AUDIO_STATE,
+                AudioManager.SCO_AUDIO_STATE_ERROR,
+            )
+            scoAudioState = state
+            scoStateSeen = true
+            Log.i(TAG, "SCO audio state (sticky): ${scoStateName(state)}")
+        }
+    }
+
+    private fun unregisterScoReceiver() {
+        scoReceiver?.let {
+            try {
+                context.unregisterReceiver(it)
+            } catch (t: Throwable) {
+                Log.w(TAG, "SCO receiver unregister failed (continuing)", t)
+            }
+        }
+        scoReceiver = null
+    }
+
+    /**
+     * Platform truth for "SCO audio is up" — not merely "a SCO device
+     * exists". `isBluetoothScoOn` alone is not proof either: the framework
+     * sets it when the SCO *start request* is accepted, before the link is
+     * reported connected. It is only used as a fallback on ROMs that never
+     * report any SCO state at all.
+     */
+    fun isScoConnected(): Boolean =
+        scoAudioState == AudioManager.SCO_AUDIO_STATE_CONNECTED ||
+            (!scoStateSeen && isBluetoothScoOn())
+
+    /** Compact SCO state for the 30 s diagnostics. */
+    fun scoStateLabel(): String = buildString {
+        append(if (scoStateSeen) scoStateName(scoAudioState) else "unreported")
+        if (isBluetoothScoOn()) append("|on")
+    }
+
+    @Suppress("DEPRECATION")
+    private fun isBluetoothScoOn(): Boolean = try {
+        audioManager.isBluetoothScoOn
+    } catch (_: Throwable) {
+        false
+    }
+
+    private fun scoStateName(state: Int): String = when (state) {
+        AudioManager.SCO_AUDIO_STATE_CONNECTED -> "CONNECTED"
+        AudioManager.SCO_AUDIO_STATE_CONNECTING -> "CONNECTING"
+        AudioManager.SCO_AUDIO_STATE_DISCONNECTED -> "DISCONNECTED"
+        AudioManager.SCO_AUDIO_STATE_ERROR -> "ERROR"
+        else -> "state=$state"
+    }
+
+    private fun hasBluetoothConnectPermission(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT,
+            ) == PackageManager.PERMISSION_GRANTED
 
     /**
      * A Bluetooth headset usable as a communication device: classic SCO

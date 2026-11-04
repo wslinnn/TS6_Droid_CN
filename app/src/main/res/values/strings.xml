@@ -234,6 +234,7 @@
     <string name="mic_source">Source du micro</string>
     <string name="mic_source_phone">Micro du téléphone</string>
     <string name="mic_source_bluetooth">Casque Bluetooth %1$s (voix HFP)</string>
+    <string name="bluetooth_permission_missing">Autorisation « Appareils à proximité » refusée : le micro du casque Bluetooth est indisponible, le micro du téléphone est utilisé.</string>
     <string name="quality_rtt">Latence aller-retour (médiane / p95)</string>
     <string name="quality_rtt_format">%1$d ms · p95 %2$d ms</string>
     <string name="quality_jitter">Gigue</string>
