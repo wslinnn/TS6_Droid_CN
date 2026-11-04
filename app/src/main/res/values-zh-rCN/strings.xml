@@ -230,6 +230,9 @@
 
     <!-- 连接质量 -->
     <string name="quality_section">连接质量</string>
+    <string name="mic_source">麦克风来源</string>
+    <string name="mic_source_phone">手机麦克风</string>
+    <string name="mic_source_bluetooth">蓝牙耳机 %1$s（HFP 音质）</string>
     <string name="quality_rtt">往返延迟（中位 / p95）</string>
     <string name="quality_rtt_format">%1$d ms · p95 %2$d ms</string>
     <string name="quality_jitter">抖动</string>

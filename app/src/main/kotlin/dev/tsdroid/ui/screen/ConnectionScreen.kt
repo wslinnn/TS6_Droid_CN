@@ -152,6 +152,11 @@ fun ConnectionScreen(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Bluetooth headset routing reads device names/enumeration; a
+            // denial only hides the headset name, the route still works
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+        }
         permissionLauncher.launch(permissions.toTypedArray())
         viewModel.resumeExistingConnection(onConnected)
     }

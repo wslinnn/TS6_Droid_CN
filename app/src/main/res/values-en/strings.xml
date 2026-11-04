@@ -230,6 +230,9 @@
 
     <!-- Connection quality -->
     <string name="quality_section">Connection quality</string>
+    <string name="mic_source">Microphone source</string>
+    <string name="mic_source_phone">Phone microphone</string>
+    <string name="mic_source_bluetooth">Bluetooth headset %1$s (HFP voice)</string>
     <string name="quality_rtt">Round-trip time (median / p95)</string>
     <string name="quality_rtt_format">%1$d ms · p95 %2$d ms</string>
     <string name="quality_jitter">Jitter</string>

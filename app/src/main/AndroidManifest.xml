@@ -7,6 +7,8 @@
     <!-- AudioManager.setMode(IN_COMMUNICATION) / setCommunicationDevice 必需：
          语音通话流路由、通话音量刻度与蓝牙 SCO 自动切换都依赖它 -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- 读取蓝牙耳机设备名与通信设备枚举（API 31+ 运行时请求；拒绝仅丢设备名，路由不受影响） -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />

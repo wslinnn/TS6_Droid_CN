@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -113,6 +114,9 @@ class AudioBridge(
          * anything this small is a silence marker, not audio.
          */
         private const val COMFORT_NOISE_FRAME_MAX_BYTES = 3
+
+        /** Comm-route playback head must advance within this under sustained writes. */
+        private const val FROZEN_HEAD_TIMEOUT_MS = 3_000L
     }
 
     private val audioConfig = AudioConfig()
@@ -196,6 +200,22 @@ class AudioBridge(
     @Volatile
     private var echoProcSampleCount = 0
 
+    // Transmit-path failure counters. The capture loop used to swallow
+    // encode/send exceptions silently — a periodic native send failure made
+    // frames vanish with no trace in any log. Written on the capture
+    // thread, diffed/reset by the playback-thread diagnostics flush.
+    @Volatile
+    private var encFailCount = 0
+    @Volatile
+    private var sendFailCount = 0
+
+    /** Live AEC handle for the zeroed-frame diagnostic (set/cleared by the capture loop). */
+    @Volatile
+    private var echoCancellerRef: EchoCanceller? = null
+
+    /** Previous cumulative zeroed-frame total — playback thread only. */
+    private var lastEchoZeroedTotal = -1L
+
     /**
      * Guards [audioRecord]/effect swaps between startCapture/stopCapture
      * (caller thread) and the capture loop's self-heal rebuilds, so a
@@ -226,6 +246,24 @@ class AudioBridge(
      * inline on the capture coroutine or under captureSwapLock (see [RecorderStopper]).
      */
     private val recorderStopper = RecorderStopper()
+
+    /**
+     * AudioTrack swaps follow the same discipline as capture swaps: the
+     * field swap is atomic, the native release happens off the swap path,
+     * and the playback loop tolerates one failed write during a switch.
+     */
+    private val trackSwapLock = Any()
+
+    /** Bluetooth communication-route plumbing + audio-device watching. */
+    private val routeManager = AudioRouteManager(audioManager, object : AudioRouteManager.Listener {
+        override suspend fun onRouteChanged(comm: Boolean, deviceName: String?) {
+            applyRoute(comm, deviceName)
+        }
+    })
+
+    /** True while track and recorder are built for the communication route. */
+    @Volatile
+    private var commRouteActive = false
 
     private var audioFocusRequest: AudioFocusRequest? = null
 
@@ -329,6 +367,10 @@ class AudioBridge(
     private val _isLocalVoiceActive = MutableStateFlow(false)
     val isLocalVoiceActive: StateFlow<Boolean> = _isLocalVoiceActive.asStateFlow()
 
+    /** Current audio routing (media path vs Bluetooth comm route), for the UI. */
+    val routeState: StateFlow<AudioRouteState>
+        get() = routeManager.routeState
+
     fun initialize() {
         try {
             // Diagnostic bisect (2026-10-13): the voice-call stream switch
@@ -344,6 +386,11 @@ class AudioBridge(
             encoder = OpusCodec(audioConfig)
             initAudioTrack()
             startPlaybackLoop()
+            // Bluetooth route watching: the media path stays the default;
+            // the manager only flips mode/devices when an SCO-capable
+            // headset appears, and every transition comes back through
+            // [applyRoute] for the track/recorder rebuilds
+            routeManager.start()
             // Push-mode receive: frames are invoked from the native pump the
             // moment they arrive, skipping the event flow entirely
             tsClient.setAudioSink(audioSink)
@@ -417,6 +464,7 @@ class AudioBridge(
                 EchoCanceller(SAMPLE_RATE, FRAME_SIZE_SAMPLES, AEC_TAIL_SAMPLES).also {
                     echoReference.reset()
                     aecRunning = true
+                    echoCancellerRef = it
                     Log.i(TAG, "Software AEC started (tail=${AEC_TAIL_MS}ms)")
                 }
             } catch (t: Throwable) {
@@ -563,12 +611,24 @@ class AudioBridge(
                         val toSend = vadGate.process(buffer, System.currentTimeMillis())
                         if (toSend != null) {
                             for (frame in toSend) {
-                                try {
+                                val encoded = try {
                                     val t0 = System.nanoTime()
-                                    val encoded = codec.encode(shortsToBytes(frame))
+                                    val out = codec.encode(shortsToBytes(frame))
                                     recordEncodeUs((System.nanoTime() - t0) / 1000)
-                                    tsClient.sendAudio(encoded, CODEC_OPUS_VOICE)
-                                } catch (_: Exception) {}
+                                    out
+                                } catch (e: Exception) {
+                                    encFailCount++
+                                    Log.w(TAG, "Opus encode failed (frame dropped)", e)
+                                    null
+                                }
+                                if (encoded != null) {
+                                    try {
+                                        tsClient.sendAudio(encoded, CODEC_OPUS_VOICE)
+                                    } catch (e: Exception) {
+                                        sendFailCount++
+                                        Log.w(TAG, "sendAudio failed (frame dropped)", e)
+                                    }
+                                }
                             }
                         }
                         _isLocalVoiceActive.value = vadGate.isActive
@@ -582,12 +642,24 @@ class AudioBridge(
                         _isLocalVoiceActive.value = isVoiceActive
 
                         val pcmBytes = shortsToBytes(buffer)
-                        try {
+                        val encoded = try {
                             val t0 = System.nanoTime()
-                            val encoded = codec.encode(pcmBytes)
+                            val out = codec.encode(pcmBytes)
                             recordEncodeUs((System.nanoTime() - t0) / 1000)
-                            tsClient.sendAudio(encoded, CODEC_OPUS_VOICE)
-                        } catch (_: Exception) {}
+                            out
+                        } catch (e: Exception) {
+                            encFailCount++
+                            Log.w(TAG, "Opus encode failed (frame dropped)", e)
+                            null
+                        }
+                        if (encoded != null) {
+                            try {
+                                tsClient.sendAudio(encoded, CODEC_OPUS_VOICE)
+                            } catch (e: Exception) {
+                                sendFailCount++
+                                Log.w(TAG, "sendAudio failed (frame dropped)", e)
+                            }
+                        }
                     }
                 } else {
                     vadGate.reset()
@@ -603,6 +675,7 @@ class AudioBridge(
             try {
                 aec?.close()
             } catch (_: Throwable) {}
+            echoCancellerRef = null
             echoReference.reset()
             // Release only the local handle. The audioRecord field belongs to
             // startCapture/stopCapture on the caller thread, so this late
@@ -650,26 +723,39 @@ class AudioBridge(
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
         )
+        if (commRouteActive) {
+            // Communication route: the SCO input only routes reliably for a
+            // communication source — raw sources stay pinned to the built-in
+            // mic on several HALs even with a preferred device set
+            val sco = routeManager.scoInputDevice()
+            Log.i(TAG, "Capture source: comm route (sco=${sco != null})")
+            return tryCreateAudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, minBuf, sco)
+                ?: tryCreateAudioRecord(MediaRecorder.AudioSource.MIC, minBuf, sco)
+        }
         // Requested raw source first, then MIC, then the platform voice
         // source as the last resort: the all-software pipeline wants an
         // unprocessed signal (vendor voice chains nonlinearly process the
         // echo path), and a silent fallback beats a dead capture loop
         val requested = captureSource.resolveSourceId()
         Log.i(TAG, "Capture source: ${captureSource.raw} (id=$requested)")
-        return tryCreateAudioRecord(requested, minBuf)
+        return tryCreateAudioRecord(requested, minBuf, null)
             ?: if (requested != MediaRecorder.AudioSource.MIC) {
-                tryCreateAudioRecord(MediaRecorder.AudioSource.MIC, minBuf)
+                tryCreateAudioRecord(MediaRecorder.AudioSource.MIC, minBuf, null)
             } else {
                 null
             }
             ?: if (requested != MediaRecorder.AudioSource.VOICE_COMMUNICATION) {
-                tryCreateAudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, minBuf)
+                tryCreateAudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, minBuf, null)
             } else {
                 null
             }
     }
 
-    private fun tryCreateAudioRecord(sourceId: Int, minBuf: Int): AudioRecord? {
+    private fun tryCreateAudioRecord(
+        sourceId: Int,
+        minBuf: Int,
+        preferredDevice: AudioDeviceInfo?,
+    ): AudioRecord? {
         val record = try {
             AudioRecord(
                 sourceId,
@@ -687,9 +773,14 @@ class AudioBridge(
             record.release()
             return null
         }
+        if (preferredDevice != null && !record.setPreferredDevice(preferredDevice)) {
+            // Routing may still land correctly via the comm route; keep the
+            // recorder rather than failing the whole capture session
+            Log.w(TAG, "setPreferredDevice(sco) rejected (source=$sourceId); relying on route")
+        }
         return try {
             record.startRecording()
-            Log.i(TAG, "Capture started (source=$sourceId)")
+            Log.i(TAG, "Capture started (source=$sourceId, sco=${preferredDevice != null})")
             record
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to start microphone capture (source=$sourceId)", e)
@@ -823,22 +914,30 @@ class AudioBridge(
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
         )
-        audioTrack = buildAudioTrack(minBuf, lowLatency = true)
+        audioTrack = buildAudioTrack(minBuf, lowLatency = true, commRoute = false)
         if (audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
             // Some devices reject PERFORMANCE_MODE_LOW_LATENCY for voice-usage
             // tracks — fall back to a plain track rather than going silent
             Log.w(TAG, "Low-latency voice track not initialized; retrying without performance mode")
             audioTrack?.release()
-            audioTrack = buildAudioTrack(minBuf, lowLatency = false)
+            audioTrack = buildAudioTrack(minBuf, lowLatency = false, commRoute = false)
         }
         audioTrack?.play()
     }
 
-    private fun buildAudioTrack(minBuf: Int, lowLatency: Boolean): AudioTrack {
+    private fun buildAudioTrack(minBuf: Int, lowLatency: Boolean, commRoute: Boolean): AudioTrack {
+        // Comm route: a voice-usage track is what follows
+        // setCommunicationDevice to the headset; on the media route the
+        // proven USAGE_GAME stream keeps its volume curve and routing
+        val usage = if (commRoute) {
+            AudioAttributes.USAGE_VOICE_COMMUNICATION
+        } else {
+            AudioAttributes.USAGE_GAME
+        }
         val builder = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_GAME)
+                    .setUsage(usage)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
@@ -854,6 +953,76 @@ class AudioBridge(
             builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
         }
         return builder.build()
+    }
+
+    /**
+     * Swap the playback track for the new route. The field swap is atomic
+     * under [trackSwapLock]; the old native track is stopped/released off
+     * the swap path so the playback loop never blocks on teardown (same
+     * discipline as capture swaps). One in-flight write may fail against
+     * the released track — the loop catches that and re-reads the field.
+     */
+    private fun rebuildTrackForRoute(commRoute: Boolean) {
+        val minBuf = AudioTrack.getMinBufferSize(
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+        )
+        val old = synchronized(trackSwapLock) {
+            val t = audioTrack
+            audioTrack = null
+            t
+        }
+        var track = buildAudioTrack(minBuf, lowLatency = true, commRoute = commRoute)
+        if (track.state != AudioTrack.STATE_INITIALIZED) {
+            Log.w(TAG, "Low-latency track not initialized for the new route; plain fallback")
+            track.release()
+            track = buildAudioTrack(minBuf, lowLatency = false, commRoute = commRoute)
+        }
+        track.play()
+        synchronized(trackSwapLock) { audioTrack = track }
+        if (old != null) {
+            Thread {
+                try {
+                    old.stop()
+                    old.release()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Old playback track release failed (continuing)", t)
+                }
+            }.start()
+        }
+        Log.i(TAG, "Playback track rebuilt for ${if (commRoute) "comm" else "media"} route")
+    }
+
+    /**
+     * Route transition: rebuild the playback track and the capture pipeline
+     * for the new route. Order follows the 2026-10-13 remedy list — the
+     * manager has already applied mode + comm device; the track must be
+     * destroyed and rebuilt after any route change, and the recorder after
+     * it. The switch window mutes playback (queues cleared) so the swap
+     * never plays through a half-configured track.
+     */
+    private suspend fun applyRoute(comm: Boolean, deviceName: String?) {
+        if (comm == commRouteActive) return
+        Log.i(
+            TAG,
+            "Route switch: ${if (comm) "comm($deviceName)" else "media"} " +
+                "(was ${if (commRouteActive) "comm" else "media"})",
+        )
+        suspendOutput(true)
+        try {
+            commRouteActive = comm
+            rebuildTrackForRoute(comm)
+            if (_isCapturing.value) {
+                val scope = captureScope
+                if (scope != null) {
+                    stopCapture()
+                    startCapture(scope)
+                }
+            }
+        } finally {
+            suspendOutput(false)
+        }
     }
 
     /**
@@ -875,6 +1044,15 @@ class AudioBridge(
             // Total PCM frames handed to AudioTrack — compared against
             // playbackHeadPosition to measure the track's buffered depth
             var writtenFrames = 0L
+
+            // Frozen-head watch ("dead track" fingerprint): while frames
+            // keep being written the head must advance. A static head under
+            // sustained writes for longer than the timeout in the comm route
+            // means the track is not consuming — force the media fallback
+            // instead of dying silently (the 2026-10-13 failure mode).
+            var headWatchValue = -1L
+            var headWatchSince = 0L
+            var lastWriteAt = 0L
 
             // Sum one decoded frame into the mix buffer with per-user gain
             fun mixIn(userId: Int, pcm: ByteArray): Boolean {
@@ -925,6 +1103,28 @@ class AudioBridge(
                 if (bufferedMs > TARGET_TRACK_BUFFER_MS) {
                     playbackWake.poll(20, java.util.concurrent.TimeUnit.MILLISECONDS)
                     continue
+                }
+
+                if (commRouteActive) {
+                    val nowMs = SystemClock.elapsedRealtime()
+                    if (head != headWatchValue) {
+                        headWatchValue = head
+                        headWatchSince = nowMs
+                    } else if (headWatchSince != 0L &&
+                        nowMs - headWatchSince > FROZEN_HEAD_TIMEOUT_MS &&
+                        nowMs - lastWriteAt < 1000
+                    ) {
+                        Log.e(
+                            TAG,
+                            "Playback head frozen under sustained writes — comm track not consuming; forcing media fallback",
+                        )
+                        headWatchValue = -1L
+                        headWatchSince = 0L
+                        routeManager.forceMediaFallback("playback head frozen (comm track)")
+                    }
+                } else {
+                    headWatchValue = -1L
+                    headWatchSince = 0L
                 }
 
                 // Talkspurt-start priming: hold the first frame(s) until a
@@ -999,8 +1199,17 @@ class AudioBridge(
                         }
                     }
                     val bytes = shortsToBytes(mixBuffer)
-                    audioTrack?.write(bytes, 0, bytes.size)
+                    val track = synchronized(trackSwapLock) { audioTrack }
+                    try {
+                        track?.write(bytes, 0, bytes.size)
+                    } catch (t: IllegalStateException) {
+                        // Track swapped mid-write during a route switch —
+                        // drop this frame; the next iteration picks up the
+                        // fresh track
+                        Log.w(TAG, "Write hit a swapped-out track (route switch)", t)
+                    }
                     writtenFrames += FRAME_SIZE_SAMPLES
+                    lastWriteAt = SystemClock.elapsedRealtime()
                     // AEC reference: exactly the PCM handed to the speaker
                     // (post-gain, post-duck, post-softClip) — feeding the raw
                     // mix pre-DUCK would feed a distorted reference.
@@ -1090,6 +1299,7 @@ class AudioBridge(
     }
 
     fun release() {
+        routeManager.stop()
         stopCapture()
         playbackJob?.cancel()
         playbackJob = null
@@ -1112,6 +1322,28 @@ class AudioBridge(
 
     /** Emit the 30s receive/encode diagnostic aggregates into AppLog. */
     private fun flushAudioDiag() {
+        /** Zeroed-frame delta over the window; -1 = unknown (no AEC / old .so). */
+        fun readEchoZeroedDelta(): Long {
+            val aec = echoCancellerRef ?: run {
+                lastEchoZeroedTotal = -1L
+                return -1L
+            }
+            val total = try {
+                aec.zeroedFrames()
+            } catch (_: Throwable) {
+                lastEchoZeroedTotal = -1L
+                return -1L
+            }
+            if (total < 0) return -1L // mixed-version native library
+            if (lastEchoZeroedTotal < 0) {
+                lastEchoZeroedTotal = total
+                return 0L
+            }
+            val delta = total - lastEchoZeroedTotal
+            lastEchoZeroedTotal = total
+            return delta
+        }
+
         for ((userId, d) in userDiag) {
             if (d.recv > 0 || d.lost > 0 || d.plc > 0) {
                 Log.i(TAG, "AudioRx user=$userId 30s: recv=${d.recv} lost=${d.lost} fec=${d.fecRepaired} plc=${d.plc} queuePeak=${d.queuePeak}")
@@ -1127,7 +1359,18 @@ class AudioBridge(
             encodeSampleCount = 0
             val samples = encodeSamplesUs.take(n.coerceAtMost(encodeSamplesUs.size)).sorted()
             val p95 = samples[(samples.size * 95 / 100).coerceIn(0, samples.size - 1)]
-            Log.i(TAG, "AudioEnc 30s: n=${samples.size} p95=${p95}us max=${samples.last()}us (budget 20000us)")
+            // san0 = blow-up-guard zeroed frames this window (a 20 ms hole
+            // each); -1 means no live AEC or a pre-counter native library
+            val sanDelta = readEchoZeroedDelta()
+            Log.i(
+                TAG,
+                "AudioEnc 30s: n=${samples.size} p95=${p95}us max=${samples.last()}us " +
+                    "(budget 20000us) micGain=$micGainFactor mode=$micMode vadDb=$vadThresholdDb " +
+                    "san0=${if (sanDelta < 0) "n/a" else sanDelta} " +
+                    "encFail=$encFailCount sendFail=$sendFailCount",
+            )
+            encFailCount = 0
+            sendFailCount = 0
         }
         if (trackBufPeakMs > 0) {
             Log.i(TAG, "AudioOut 30s: trackBufPeak=${trackBufPeakMs}ms (target ${TARGET_TRACK_BUFFER_MS}ms)")

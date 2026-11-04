@@ -19,6 +19,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.tsdroid.bridge.AvatarCache
 import dev.tsdroid.bridge.AudioBridge
+import dev.tsdroid.bridge.AudioRouteState
 import dev.tsdroid.bridge.FileCache
 import dev.tsdroid.bridge.IconCache
 import dev.tsdroid.bridge.MicMode
@@ -236,6 +237,10 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     /** Mirrors AudioBridge.isMuted so the home mic button follows overlay toggles. */
     private val _isMicMuted = MutableStateFlow(true)
     val isMicMuted: StateFlow<Boolean> = _isMicMuted.asStateFlow()
+
+    /** Mirrors the audio routing state (media path vs Bluetooth comm route). */
+    private val _audioRoute = MutableStateFlow<AudioRouteState>(AudioRouteState.Media)
+    val audioRoute: StateFlow<AudioRouteState> = _audioRoute.asStateFlow()
 
     // Stable placeholder so collectors before bindToService() don't get a
     // brand-new flow instance on every access
@@ -522,6 +527,9 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             }
             viewModelScope.launch {
                 service.audioBridge.isMuted.collect { _isMicMuted.value = it }
+            }
+            viewModelScope.launch {
+                service.audioBridge.routeState.collect { _audioRoute.value = it }
             }
 
             // Start event loop (guarded by AtomicBoolean — safe if already running)

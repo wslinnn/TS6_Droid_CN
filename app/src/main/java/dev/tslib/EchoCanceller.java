@@ -73,6 +73,23 @@ public final class EchoCanceller implements AutoCloseable {
         nativeReset(nativePtr);
     }
 
+    /**
+     * Cumulative count of frames the blow-up guard zeroed since creation.
+     * A zeroed frame is a 20 ms hole in the transmitted stream — any
+     * non-zero rate in diagnostics is a bug report.
+     *
+     * @return cumulative zeroed-frame count, or -1 when the loaded native
+     *     library predates this counter (mixed-version tolerance)
+     */
+    public long zeroedFrames() {
+        checkNotClosed();
+        try {
+            return nativeZeroedFrames(nativePtr);
+        } catch (UnsatisfiedLinkError e) {
+            return -1;
+        }
+    }
+
     @Override
     public void close() {
         if (nativePtr != 0) {
@@ -92,4 +109,5 @@ public final class EchoCanceller implements AutoCloseable {
     private static native void nativeDestroy(long ptr);
     private static native void nativeReset(long ptr);
     private static native int nativeProcess(long ptr, short[] mic, short[] far, short[] out);
+    private static native long nativeZeroedFrames(long ptr);
 }

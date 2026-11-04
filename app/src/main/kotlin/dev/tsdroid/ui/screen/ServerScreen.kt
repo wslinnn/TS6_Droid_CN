@@ -145,6 +145,7 @@ fun ServerScreen(
     val userVolumes by viewModel.userVolumes.collectAsStateWithLifecycle()
     val isOutputMuted by viewModel.isOutputMuted.collectAsStateWithLifecycle()
     val isMicMuted by viewModel.isMicMuted.collectAsStateWithLifecycle()
+    val audioRoute by viewModel.audioRoute.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val unreadChannel by viewModel.unreadChannel.collectAsStateWithLifecycle()
     val unreadPrivate by viewModel.unreadPrivate.collectAsStateWithLifecycle()
@@ -772,6 +773,7 @@ fun ServerScreen(
             info = serverInfo,
             address = viewModel.connectedAddress,
             quality = qualitySnapshot,
+            micRoute = audioRoute,
             onDismiss = {
                 viewModel.setServerInfoPolling(false)
                 showServerInfo = false
