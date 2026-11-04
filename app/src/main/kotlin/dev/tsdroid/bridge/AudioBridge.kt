@@ -12,6 +12,7 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.SystemClock
 import dev.tsdroid.data.AppLog as Log
 import androidx.core.content.ContextCompat
@@ -212,6 +213,24 @@ class AudioBridge(
     /** Live AEC handle for the zeroed-frame diagnostic (set/cleared by the capture loop). */
     @Volatile
     private var echoCancellerRef: EchoCanceller? = null
+
+    // Playback discard counters by reason — written on the native pump
+    // thread, diffed/reset in the 30s flush. A non-zero suspended count means
+    // focus state is dropping the whole session's output.
+    @Volatile
+    private var discardMutedUser = 0
+    @Volatile
+    private var discardOutputMuted = 0
+    @Volatile
+    private var discardSuspended = 0
+    @Volatile
+    private var discardGainZero = 0
+
+    /** Short/failed AudioTrack writes + total frames written (playback diag). */
+    @Volatile
+    private var writeFailCount = 0
+    @Volatile
+    private var playbackWritesTotal = 0L
 
     /** Previous cumulative zeroed-frame total — playback thread only. */
     private var lastEchoZeroedTotal = -1L
@@ -809,6 +828,10 @@ class AudioBridge(
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
         val listener = AudioManager.OnAudioFocusChangeListener { change ->
+            Log.i(
+                TAG,
+                "Audio focus change: $change (ducked=$duckedByFocus suspended=$outputSuspendedByFocus)",
+            )
             when (change) {
                 // Permanent loss never gets a GAIN callback afterwards —
                 // duck the output and keep re-requesting in the background
@@ -876,6 +899,7 @@ class AudioBridge(
 
     private fun suspendOutput(suspend: Boolean) {
         if (outputSuspendedByFocus == suspend) return
+        Log.i(TAG, "Output suspended=$suspend (focus)")
         outputSuspendedByFocus = suspend
         if (suspend) {
             // Discard anything queued — a resume after a focus gap must not
@@ -1210,15 +1234,25 @@ class AudioBridge(
                     }
                     val bytes = shortsToBytes(mixBuffer)
                     val track = synchronized(trackSwapLock) { audioTrack }
-                    try {
-                        track?.write(bytes, 0, bytes.size)
+                    val written = try {
+                        track?.write(bytes, 0, bytes.size) ?: -1
                     } catch (t: IllegalStateException) {
                         // Track swapped mid-write during a route switch —
                         // drop this frame; the next iteration picks up the
                         // fresh track
                         Log.w(TAG, "Write hit a swapped-out track (route switch)", t)
+                        -1
+                    }
+                    if (written != bytes.size) {
+                        // Short/error writes are a silent-session risk on
+                        // route changes — surfaced in the 30s diagnostics
+                        writeFailCount++
+                        if (writeFailCount == 1) {
+                            Log.w(TAG, "AudioTrack.write returned $written of ${bytes.size}")
+                        }
                     }
                     writtenFrames += FRAME_SIZE_SAMPLES
+                    playbackWritesTotal += FRAME_SIZE_SAMPLES
                     lastWriteAt = SystemClock.elapsedRealtime()
                     // AEC reference: exactly the PCM handed to the speaker
                     // (post-gain, post-duck, post-softClip) — feeding the raw
@@ -1273,10 +1307,10 @@ class AudioBridge(
         } else {
             tocDurationCounts.merge(durationUs, 1, Int::plus)
         }
-        if (userId in mutedUserIds) return
-        if (_isOutputMuted.value) return // Global output mute — discard incoming audio
-        if (outputSuspendedByFocus) return // Another app holds focus — discard instead of queueing
-        if (gainFactor == 0f) return // Speaker slider at 0% — same as muted
+        if (userId in mutedUserIds) { discardMutedUser++; return }
+        if (_isOutputMuted.value) { discardOutputMuted++; return } // Global output mute — discard incoming audio
+        if (outputSuspendedByFocus) { discardSuspended++; return } // Another app holds focus — discard instead of queueing
+        if (gainFactor == 0f) { discardGainZero++; return } // Speaker slider at 0% — same as muted
         val queue = userQueues.getOrPut(userId) { FrameQueue(MAX_QUEUE_FRAMES) }
         // Full queue evicts the OLDEST frame: fresh speech beats stale speech
         queue.offer(opusData, seq)
@@ -1376,15 +1410,45 @@ class AudioBridge(
                 TAG,
                 "AudioEnc 30s: n=${samples.size} p95=${p95}us max=${samples.last()}us " +
                     "(budget 20000us) micGain=$micGainFactor mode=$micMode vadDb=$vadThresholdDb " +
+                    "route=${if (commRouteActive) "comm" else "media"} " +
+                    "callVol=${audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL)} " +
                     "san0=${if (sanDelta < 0) "n/a" else sanDelta} " +
                     "encFail=$encFailCount sendFail=$sendFailCount",
             )
             encFailCount = 0
             sendFailCount = 0
         }
-        if (trackBufPeakMs > 0) {
-            Log.i(TAG, "AudioOut 30s: trackBufPeak=${trackBufPeakMs}ms (target ${TARGET_TRACK_BUFFER_MS}ms)")
+        // Playback path snapshot: a silent session with a healthy head and
+        // full buffers means the loss is downstream (volume/focus/routing),
+        // not in the mix pipeline — surface every field instead of guessing
+        run {
+            val outTrack = audioTrack
+            val head = outTrack?.playbackHeadPosition?.toLong() ?: -1L
+            val playState = outTrack?.playState ?: -1
+            val commDevType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audioManager.communicationDevice?.type ?: -1
+            } else {
+                -1
+            }
+            Log.i(
+                TAG,
+                "AudioOut 30s: trackBufPeak=${trackBufPeakMs}ms (target ${TARGET_TRACK_BUFFER_MS}ms) " +
+                    "head=$head writes=$playbackWritesTotal playState=$playState " +
+                    "underruns=${outTrack?.underrunCount ?: -1} " +
+                    "callVol=${audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL)}/" +
+                    "${audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)} " +
+                    "musicVol=${audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)} " +
+                    "suspended=$outputSuspendedByFocus ducked=$duckedByFocus " +
+                    "route=${if (commRouteActive) "comm" else "media"} commDev=$commDevType " +
+                    "discard[susp=$discardSuspended outMuted=$discardOutputMuted gain0=$discardGainZero userMuted=$discardMutedUser] " +
+                    "writeFail=$writeFailCount",
+            )
             trackBufPeakMs = 0
+            discardSuspended = 0
+            discardOutputMuted = 0
+            discardGainZero = 0
+            discardMutedUser = 0
+            writeFailCount = 0
         }
         val qn = queueDelaySampleCount
         if (qn > 0) {

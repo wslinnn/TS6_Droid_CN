@@ -16,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** Capture/playback routing state surfaced to the UI. */
@@ -69,7 +70,11 @@ class AudioRouteManager(
     private var legacyScoReceiverRegistered = false
 
     /** Currently applied communication device (null on the media path). */
+    @Volatile
     private var appliedCommDevice: AudioDeviceInfo? = null
+
+    /** Drift watch over the communication route (device self-reverts). */
+    private var commWatchJob: Job? = null
 
     /**
      * Suppresses communication-route re-entry after a failed attempt until
@@ -113,14 +118,22 @@ class AudioRouteManager(
 
     /**
      * Force a revert to the media path — the playback-loop's frozen-head
-     * detector ("dead track" fingerprint) calls this. The communication
-     * route stays blocked for [COMM_RETRY_COOLDOWN_MS] so the same headset
-     * cannot immediately trap the path again.
+     * detector ("dead track" fingerprint) and the comm-device drift watch
+     * call this. The communication route stays blocked for
+     * [COMM_RETRY_COOLDOWN_MS] so the same headset cannot immediately trap
+     * the path again.
      */
     fun forceMediaFallback(reason: String) {
         Log.w(TAG, "Route fallback requested: $reason")
         commBlockedUntil = SystemClock.elapsedRealtime() + COMM_RETRY_COOLDOWN_MS
-        scheduleEvaluate(immediate = true)
+        // evaluate() alone would early-return while the comm route is
+        // applied; leave it explicitly and notify the pipeline.
+        scope.launch {
+            if (appliedCommDevice != null) {
+                exitCommRoute()
+                deliverRoute(comm = false, deviceName = null)
+            }
+        }
     }
 
     /** Input device for the active SCO link, or null on the media path. */
@@ -251,6 +264,7 @@ class AudioRouteManager(
                 return false
             }
             ensureCallVolumeNotMuted()
+            startCommWatch()
             Log.i(TAG, "Comm route up: mode=IN_COMMUNICATION dev=${device.typeName()}")
             true
         } catch (t: Throwable) {
@@ -261,6 +275,8 @@ class AudioRouteManager(
     }
 
     private fun exitCommRoute() {
+        commWatchJob?.cancel()
+        commWatchJob = null
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 audioManager.clearCommunicationDevice()
@@ -277,6 +293,57 @@ class AudioRouteManager(
     }
 
     /**
+     * The communication device is not sticky on several ROMs: after the
+     * route is established the framework can silently fall back to the
+     * earpiece while the track keeps consuming normally — audible only as
+     * "the headset plays nothing", with no frozen-head fingerprint. Re-assert
+     * when the device or the SCO link drifts, and give up to the media path
+     * after repeated failures.
+     */
+    private fun startCommWatch() {
+        commWatchJob?.cancel()
+        commWatchJob = scope.launch {
+            var lostStreak = 0
+            while (isActive) {
+                delay(COMM_DEVICE_WATCH_INTERVAL_MS)
+                val applied = appliedCommDevice ?: return@launch
+                val current = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    audioManager.communicationDevice
+                } else {
+                    applied // legacy path has no readable communication device
+                }
+                val scoPresent = scoInputDevice() != null
+                if (current?.id == applied.id && scoPresent) {
+                    lostStreak = 0
+                    continue
+                }
+                lostStreak++
+                Log.w(
+                    TAG,
+                    "Comm route drift (dev=${current?.let { it.typeName() } ?: "none"}, " +
+                        "sco=$scoPresent, streak=$lostStreak)",
+                )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val fresh = findBluetoothCommDevice()
+                    if (fresh != null &&
+                        audioManager.setCommunicationDevice(fresh) &&
+                        audioManager.communicationDevice?.id == fresh.id
+                    ) {
+                        appliedCommDevice = fresh
+                        lostStreak = 0
+                        Log.i(TAG, "Comm device re-asserted (${fresh.typeName()})")
+                        continue
+                    }
+                }
+                if (lostStreak >= COMM_DEVICE_LOST_STREAK_LIMIT) {
+                    forceMediaFallback("comm device lost (streak $lostStreak)")
+                    return@launch
+                }
+            }
+        }
+    }
+
+    /**
      * MODE_IN_COMMUNICATION routes playback through the voice-call volume
      * stream. Phones that never made calls keep that stream at 0, which
      * reads as a completely dead session; lift it once and restore the
@@ -286,12 +353,15 @@ class AudioRouteManager(
     private fun ensureCallVolumeNotMuted() {
         try {
             val current = audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
-            if (current > 0) return
             val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
-            if (max <= 0) return
+            Log.i(TAG, "Voice-call stream volume=$current/$max")
+            // Lift near-muted values too: 1-2 steps out of 15 is inaudible
+            // and reads as a dead headset, indistinguishable from zero
+            if (max <= 0 || current >= (max * 3) / 10) return
             savedCallVolume = current
-            audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, (max * 8) / 10, 0)
-            Log.i(TAG, "Voice-call stream was muted; raised to ${(max * 8) / 10}/$max for the comm route")
+            val target = (max * 8) / 10
+            audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, target, 0)
+            Log.i(TAG, "Voice-call stream near-muted ($current/$max); raised to $target for the comm route")
         } catch (t: Throwable) {
             Log.w(TAG, "Voice-call volume lift failed (continuing)", t)
         }
@@ -360,6 +430,12 @@ class AudioRouteManager(
 
         /** Pause between setCommunicationDevice attempts. */
         private const val SET_COMM_RETRY_DELAY_MS = 300L
+
+        /** Drift watch cadence over an established communication route. */
+        private const val COMM_DEVICE_WATCH_INTERVAL_MS = 2_000L
+
+        /** Consecutive drift checks before abandoning the comm route. */
+        private const val COMM_DEVICE_LOST_STREAK_LIMIT = 3
 
         /** Cooldown after a failed comm attempt before trying the same headset again. */
         private const val COMM_RETRY_COOLDOWN_MS = 10_000L
