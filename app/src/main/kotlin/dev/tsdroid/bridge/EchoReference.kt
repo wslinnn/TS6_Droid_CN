@@ -20,7 +20,8 @@ package dev.tsdroid.bridge
  *   (the speaker emitted silence) — otherwise the reference timeline would
  *   fall behind forever after the first talkspurt pause.
  *
- * Drift correction is deliberately bounded (拍板边界: 管线级全静态): a stale
+ * Drift correction is deliberately bounded (pipeline-level, fully static):
+ * a stale
  * reference skips forward at most to [maxLagSamples]; when the capture stream
  * outruns the reference (idle playback) the read yields zeros, and the first
  * read after the stream advances again re-aligns to the newest frame. All
