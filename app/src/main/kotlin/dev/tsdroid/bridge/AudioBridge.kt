@@ -121,6 +121,9 @@ class AudioBridge(
 
         /** Comm voice-track construction ladder length (see buildCommAudioTrack). */
         private const val COMM_TRACK_VARIANT_COUNT = 3
+
+        /** Let the async audio-policy apply the mode/device switch before building the voice track. */
+        private const val COMM_TRACK_SETTLE_MS = 400L
     }
 
     private val audioConfig = AudioConfig()
@@ -1095,6 +1098,10 @@ class AudioBridge(
                 // track must be built against the asserted state or it lands
                 // on the media stream and never reaches the headset
                 routeManager.reassertCommPlumbing()
+                // The audio policy applies mode/device changes asynchronously;
+                // a voice track created inside that window initializes fine
+                // but is never consumed by the HAL (observed on api 37)
+                delay(COMM_TRACK_SETTLE_MS)
             }
             rebuildTrackForRoute(comm)
             if (_isCapturing.value) {
