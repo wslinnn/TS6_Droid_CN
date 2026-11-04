@@ -191,20 +191,44 @@ class AudioRouteManager(
         return try {
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (!audioManager.setCommunicationDevice(device) ||
-                    audioManager.communicationDevice?.id != device.id
-                ) {
-                    Log.w(TAG, "setCommunicationDevice did not stick to ${device.typeName()}")
+                // The framework applies the communication device
+                // asynchronously and the device object itself can be
+                // refreshed mid-connect (ids change), so a single call plus
+                // an instant id read-back is NOT a reliable verdict — seen
+                // as "did not stick" ~300ms after HFP connect on API 37.
+                // Retry with fresh lookups and poll the read-back instead.
+                var applied: AudioDeviceInfo? = null
+                var attempt = 0
+                while (applied == null && attempt < SET_COMM_MAX_ATTEMPTS) {
+                    attempt++
+                    val target = findBluetoothCommDevice() ?: break // headset gone
+                    if (!audioManager.setCommunicationDevice(target)) {
+                        Log.w(TAG, "setCommunicationDevice rejected (attempt $attempt)")
+                    } else {
+                        val deadline = SystemClock.elapsedRealtime() + COMM_STICK_POLL_MS
+                        while (SystemClock.elapsedRealtime() < deadline) {
+                            if (audioManager.communicationDevice?.id == target.id) {
+                                applied = target
+                                break
+                            }
+                            delay(200)
+                        }
+                    }
+                    if (applied == null) delay(SET_COMM_RETRY_DELAY_MS)
+                }
+                if (applied == null) {
+                    Log.w(TAG, "setCommunicationDevice did not stick after $attempt attempts")
                     exitCommRoute()
                     return false
                 }
+                appliedCommDevice = applied
             } else {
                 // Legacy path (API 29/30): request SCO directly and confirm
                 // the SCO input device materializes below.
                 audioManager.startBluetoothSco()
                 audioManager.isBluetoothScoOn = true
+                appliedCommDevice = device
             }
-            appliedCommDevice = device
             if (!waitForScoInput(SCO_START_TIMEOUT_MS)) {
                 Log.w(TAG, "SCO input device did not appear within ${SCO_START_TIMEOUT_MS}ms")
                 exitCommRoute()
@@ -277,6 +301,15 @@ class AudioRouteManager(
 
         /** SCO must materialize as an input device within this window. */
         private const val SCO_START_TIMEOUT_MS = 5_000L
+
+        /** setCommunicationDevice retry budget (async application + device-id refresh). */
+        private const val SET_COMM_MAX_ATTEMPTS = 5
+
+        /** How long one attempt polls the read-back before retrying. */
+        private const val COMM_STICK_POLL_MS = 1_500L
+
+        /** Pause between setCommunicationDevice attempts. */
+        private const val SET_COMM_RETRY_DELAY_MS = 300L
 
         /** Cooldown after a failed comm attempt before trying the same headset again. */
         private const val COMM_RETRY_COOLDOWN_MS = 10_000L
