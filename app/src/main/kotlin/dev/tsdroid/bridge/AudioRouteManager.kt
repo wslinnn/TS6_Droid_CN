@@ -125,6 +125,9 @@ class AudioRouteManager(
      */
     private var savedCallVolume = -1
 
+    /** Speakerphone state saved when entering the comm route (legacy trio). */
+    private var savedSpeakerphoneOn: Boolean? = null
+
     fun start() {
         if (deviceCallback != null) return
         deviceCallback = object : AudioDeviceCallback() {
@@ -196,6 +199,8 @@ class AudioRouteManager(
                 }
             }
         }
+        silenceSpeakerphone()
+        requestLegacySco("reassert")
         Log.i(TAG, "Comm plumbing re-asserted before track rebuild (mode $previousMode -> IN_COMMUNICATION)")
     }
 
@@ -310,6 +315,7 @@ class AudioRouteManager(
             // after the listener released the media track
             delay(COMM_PREPARE_SETTLE_MS)
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            silenceSpeakerphone()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 // The framework applies the communication device
                 // asynchronously and the device object itself can be
@@ -343,12 +349,16 @@ class AudioRouteManager(
                 }
                 appliedCommDevice = applied
             } else {
-                // Legacy path (API 29/30): request SCO directly and confirm
-                // the SCO input device materializes below.
-                audioManager.startBluetoothSco()
-                audioManager.isBluetoothScoOn = true
+                // Legacy path (API 29/30): no readable communication device
                 appliedCommDevice = device
             }
+            // Legacy SCO request on every API level, mirroring the path older
+            // VoIP apps use on this ROM class: startBluetoothSco() makes this
+            // app the SCO client and setBluetoothScoOn(true) forces the
+            // communication strategy to SCO. setCommunicationDevice() alone
+            // has been observed to connect SCO without starting its audio
+            // stream (SCO CONNECTED, track routed to type 7, head frozen).
+            requestLegacySco("enter")
             if (!waitForScoConnection(SCO_START_TIMEOUT_MS)) {
                 Log.w(TAG, "SCO did not connect within ${SCO_START_TIMEOUT_MS}ms; staying on media path")
                 exitCommRoute()
@@ -375,13 +385,12 @@ class AudioRouteManager(
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 audioManager.clearCommunicationDevice()
-            } else {
-                audioManager.isBluetoothScoOn = false
-                audioManager.stopBluetoothSco()
             }
         } catch (t: Throwable) {
             Log.w(TAG, "exitCommRoute plumbing failed (continuing)", t)
         }
+        stopLegacySco()
+        restoreSpeakerphone()
         restoreCallVolume()
         audioManager.mode = AudioManager.MODE_NORMAL
         appliedCommDevice = null
@@ -470,6 +479,66 @@ class AudioRouteManager(
             audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, saved, 0)
         } catch (t: Throwable) {
             Log.w(TAG, "Voice-call volume restore failed (continuing)", t)
+        }
+    }
+
+    /**
+     * Legacy trio, part 1: communication routing on older stacks requires
+     * speakerphone to be off before SCO is requested. Without it some ROMs
+     * keep the output on the speaker path and never start the SCO stream.
+     */
+    @Suppress("DEPRECATION")
+    private fun silenceSpeakerphone() {
+        if (savedSpeakerphoneOn != null) return
+        savedSpeakerphoneOn = try {
+            audioManager.isSpeakerphoneOn
+        } catch (_: Throwable) {
+            false
+        }
+        try {
+            audioManager.isSpeakerphoneOn = false
+            Log.i(TAG, "Speakerphone off for comm route (was $savedSpeakerphoneOn)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "setSpeakerphoneOn(false) failed (continuing)", t)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun restoreSpeakerphone() {
+        val saved = savedSpeakerphoneOn ?: return
+        savedSpeakerphoneOn = null
+        try {
+            audioManager.isSpeakerphoneOn = saved
+        } catch (t: Throwable) {
+            Log.w(TAG, "Speakerphone restore failed (continuing)", t)
+        }
+    }
+
+    /**
+     * Legacy trio, part 2: request SCO through the deprecated API as well as
+     * setCommunicationDevice(). It makes this app the SCO client and forces
+     * the communication strategy to the headset — the path older VoIP apps
+     * use, and the only one observed to start the SCO audio stream on this
+     * ROM class.
+     */
+    @Suppress("DEPRECATION")
+    private fun requestLegacySco(reason: String) {
+        try {
+            audioManager.startBluetoothSco()
+            audioManager.isBluetoothScoOn = true
+            Log.i(TAG, "Legacy SCO requested ($reason)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "Legacy SCO request failed ($reason)", t)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun stopLegacySco() {
+        try {
+            audioManager.isBluetoothScoOn = false
+            audioManager.stopBluetoothSco()
+        } catch (t: Throwable) {
+            Log.w(TAG, "Legacy SCO stop failed (continuing)", t)
         }
     }
 
