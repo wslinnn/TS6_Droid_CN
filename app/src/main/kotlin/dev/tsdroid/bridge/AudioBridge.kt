@@ -1036,6 +1036,12 @@ class AudioBridge(
         suspendOutput(true)
         try {
             commRouteActive = comm
+            if (comm) {
+                // The ROM can reset mode/comm device during SCO setup; the
+                // track must be built against the asserted state or it lands
+                // on the media stream and never reaches the headset
+                routeManager.reassertCommPlumbing()
+            }
             rebuildTrackForRoute(comm)
             if (_isCapturing.value) {
                 val scope = captureScope
@@ -1438,6 +1444,7 @@ class AudioBridge(
                     "callVol=${audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL)}/" +
                     "${audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)} " +
                     "musicVol=${audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)} " +
+                    "mode=${audioManager.mode} " +
                     "suspended=$outputSuspendedByFocus ducked=$duckedByFocus " +
                     "route=${if (commRouteActive) "comm" else "media"} commDev=$commDevType " +
                     "discard[susp=$discardSuspended outMuted=$discardOutputMuted gain0=$discardGainZero userMuted=$discardMutedUser] " +

@@ -136,6 +136,31 @@ class AudioRouteManager(
         }
     }
 
+    /**
+     * Re-assert mode + communication device right before the track rebuild:
+     * the ROM can silently reset the mode during the SCO setup window, and a
+     * track created afterwards lands on the media stream (volume keys follow
+     * media, voice stream never plays). Called by the route listener.
+     */
+    fun reassertCommPlumbing() {
+        val applied = appliedCommDevice ?: return
+        val previousMode = audioManager.mode
+        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val current = audioManager.communicationDevice
+            if (current?.id != applied.id) {
+                val fresh = findBluetoothCommDevice()
+                if (fresh != null && audioManager.setCommunicationDevice(fresh)) {
+                    appliedCommDevice = fresh
+                    Log.i(TAG, "Comm device re-asserted before track rebuild (${fresh.typeName()})")
+                } else {
+                    Log.w(TAG, "Comm device re-assert failed before track rebuild")
+                }
+            }
+        }
+        Log.i(TAG, "Comm plumbing re-asserted before track rebuild (mode $previousMode -> IN_COMMUNICATION)")
+    }
+
     /** Input device for the active SCO link, or null on the media path. */
     fun scoInputDevice(): AudioDeviceInfo? {
         return audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull {
