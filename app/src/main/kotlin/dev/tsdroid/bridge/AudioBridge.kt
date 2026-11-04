@@ -1210,19 +1210,24 @@ class AudioBridge(
                     ) {
                         headWatchValue = -1L
                         headWatchSince = 0L
+                        val trackNow = synchronized(trackSwapLock) { audioTrack }
                         if (commTrackVariant < COMM_TRACK_VARIANT_COUNT - 1) {
                             // Dead track on this ROM — walk the construction
                             // ladder before surrendering the headset
                             commTrackVariant++
                             Log.w(
                                 TAG,
-                                "Comm track not consuming; retrying variant $commTrackVariant",
+                                "Comm track not consuming (head=$head writes=$playbackWritesTotal " +
+                                    "playState=${trackNow?.playState ?: -1} underruns=${trackNow?.underrunCount ?: -1}); " +
+                                    "retrying variant $commTrackVariant",
                             )
                             rebuildTrackForRoute(commRoute = true)
                         } else {
                             Log.e(
                                 TAG,
-                                "All comm track variants dead — forcing media fallback",
+                                "All comm track variants dead (head=$head writes=$playbackWritesTotal " +
+                                    "playState=${trackNow?.playState ?: -1} underruns=${trackNow?.underrunCount ?: -1}) " +
+                                    "— forcing media fallback",
                             )
                             routeManager.forceMediaFallback("playback head frozen (comm track)")
                         }
