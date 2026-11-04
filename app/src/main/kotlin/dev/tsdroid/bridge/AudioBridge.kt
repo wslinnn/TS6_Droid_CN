@@ -1042,8 +1042,13 @@ class AudioBridge(
             val mixBuffer = ShortArray(FRAME_SIZE_SAMPLES)
             val decodeBuffer = ShortArray(FRAME_SIZE_SAMPLES)
             // Total PCM frames handed to AudioTrack — compared against
-            // playbackHeadPosition to measure the track's buffered depth
+            // playbackHeadPosition to measure the track's buffered depth.
+            // Reset whenever the track instance changes: a fresh track's
+            // head starts at 0 while this counter is cumulative, and the
+            // mismatch reads as an enormous phantom backlog that would stop
+            // all writes after every route switch.
             var writtenFrames = 0L
+            var currentTrack: AudioTrack? = null
 
             // Frozen-head watch ("dead track" fingerprint): while frames
             // keep being written the head must advance. A static head under
@@ -1097,7 +1102,12 @@ class AudioBridge(
                 // time while this loop writes at decode pace — without a cap,
                 // any burst piles up inside the track buffer and lingers as
                 // sustained latency. Capacity is headroom, this is the bound.
-                val head = audioTrack?.playbackHeadPosition?.toLong() ?: 0L
+                val trackNow = synchronized(trackSwapLock) { audioTrack }
+                if (trackNow !== currentTrack) {
+                    currentTrack = trackNow
+                    writtenFrames = 0L
+                }
+                val head = trackNow?.playbackHeadPosition?.toLong() ?: 0L
                 val bufferedMs = (writtenFrames - head) * 1000 / SAMPLE_RATE
                 if (bufferedMs > trackBufPeakMs) trackBufPeakMs = bufferedMs
                 if (bufferedMs > TARGET_TRACK_BUFFER_MS) {

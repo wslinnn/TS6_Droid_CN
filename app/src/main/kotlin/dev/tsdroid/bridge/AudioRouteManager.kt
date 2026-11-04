@@ -79,6 +79,15 @@ class AudioRouteManager(
     @Volatile
     private var commBlockedUntil = 0L
 
+    /**
+     * Voice-call stream volume saved when entering the communication route.
+     * MODE_IN_COMMUNICATION moves playback onto the voice-call stream, and a
+     * phone that never made calls keeps that slider at 0 — the whole session
+     * goes silent in the headset while capture still works. Lifted from zero
+     * on entry, restored on exit; a non-zero user setting is never touched.
+     */
+    private var savedCallVolume = -1
+
     fun start() {
         if (deviceCallback != null) return
         deviceCallback = object : AudioDeviceCallback() {
@@ -177,6 +186,13 @@ class AudioRouteManager(
     }
 
     private suspend fun deliverRoute(comm: Boolean, deviceName: String?) {
+        // Publish BEFORE notifying so the UI never lags the actual plumbing;
+        // the listener rebuilds track/recorder for the new route
+        _routeState.value = if (comm) {
+            AudioRouteState.Comm(deviceName ?: "Bluetooth headset")
+        } else {
+            AudioRouteState.Media
+        }
         try {
             listener.onRouteChanged(comm, deviceName)
         } catch (t: Throwable) {
@@ -234,6 +250,7 @@ class AudioRouteManager(
                 exitCommRoute()
                 return false
             }
+            ensureCallVolumeNotMuted()
             Log.i(TAG, "Comm route up: mode=IN_COMMUNICATION dev=${device.typeName()}")
             true
         } catch (t: Throwable) {
@@ -254,8 +271,41 @@ class AudioRouteManager(
         } catch (t: Throwable) {
             Log.w(TAG, "exitCommRoute plumbing failed (continuing)", t)
         }
+        restoreCallVolume()
         audioManager.mode = AudioManager.MODE_NORMAL
         appliedCommDevice = null
+    }
+
+    /**
+     * MODE_IN_COMMUNICATION routes playback through the voice-call volume
+     * stream. Phones that never made calls keep that stream at 0, which
+     * reads as a completely dead session; lift it once and restore the
+     * user's value on exit. A non-zero setting belongs to the user — leave
+     * it alone.
+     */
+    private fun ensureCallVolumeNotMuted() {
+        try {
+            val current = audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
+            if (current > 0) return
+            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
+            if (max <= 0) return
+            savedCallVolume = current
+            audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, (max * 8) / 10, 0)
+            Log.i(TAG, "Voice-call stream was muted; raised to ${(max * 8) / 10}/$max for the comm route")
+        } catch (t: Throwable) {
+            Log.w(TAG, "Voice-call volume lift failed (continuing)", t)
+        }
+    }
+
+    private fun restoreCallVolume() {
+        val saved = savedCallVolume
+        savedCallVolume = -1
+        if (saved < 0) return
+        try {
+            audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, saved, 0)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Voice-call volume restore failed (continuing)", t)
+        }
     }
 
     /** Poll for the SCO input device; it only exists once SCO is established. */
