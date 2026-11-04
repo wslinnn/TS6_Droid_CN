@@ -7,8 +7,15 @@
     <!-- AudioManager.setMode(IN_COMMUNICATION) / setCommunicationDevice 必需：
          语音通话流路由、通话音量刻度与蓝牙 SCO 自动切换都依赖它 -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <!-- 读取蓝牙耳机设备名与通信设备枚举（API 31+ 运行时请求；拒绝仅丢设备名，路由不受影响） -->
+    <!-- 蓝牙耳机枚举、设备名与 SCO 路由（API 31+ 运行时权限）。
+         缺授权时部分 ROM 会让 setCommunicationDevice() 静默失败：请求被接受
+         但 SCO 从未建立，voice 轨挂在空路上——必须显式校验，不能当成只丢设备名 -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- 通话类前台服务：Android 14+ 声明 phoneCall 类型必须同时持 MANAGE_OWN_CALLS
+         （普通权限，装包即授）或为默认拨号器，否则 startForeground 抛 SecurityException。
+         部分 ROM 以"是否通话应用"决定通信路由（voice 输出 / SCO）的归属 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
@@ -41,7 +48,7 @@
 
         <service
             android:name="dev.tsdroid.service.TsConnectionService"
-            android:foregroundServiceType="microphone|mediaPlayback|specialUse"
+            android:foregroundServiceType="microphone|mediaPlayback|phoneCall|specialUse"
             android:exported="false">
         </service>
 
