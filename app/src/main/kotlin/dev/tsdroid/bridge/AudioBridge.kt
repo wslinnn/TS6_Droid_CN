@@ -118,6 +118,9 @@ class AudioBridge(
 
         /** Comm-route playback head must advance within this under sustained writes. */
         private const val FROZEN_HEAD_TIMEOUT_MS = 3_000L
+
+        /** Comm voice-track construction ladder length (see buildCommAudioTrack). */
+        private const val COMM_TRACK_VARIANT_COUNT = 3
     }
 
     private val audioConfig = AudioConfig()
@@ -283,6 +286,16 @@ class AudioBridge(
     /** True while track and recorder are built for the communication route. */
     @Volatile
     private var commRouteActive = false
+
+    /**
+     * Which voice-track construction the comm route is currently using.
+     * Some ROMs initialize a voice-usage track successfully but the HAL
+     * never consumes it (playback head frozen); the ladder tries
+     * attributes+low-latency, attributes plain, then the legacy
+     * STREAM_VOICE_CALL constructor before giving up to the media path.
+     */
+    @Volatile
+    private var commTrackVariant = 0
 
     private var audioFocusRequest: AudioFocusRequest? = null
 
@@ -997,11 +1010,20 @@ class AudioBridge(
             audioTrack = null
             t
         }
-        var track = buildAudioTrack(minBuf, lowLatency = true, commRoute = commRoute)
+        var track: AudioTrack
+        if (commRoute) {
+            track = buildCommAudioTrack(minBuf, commTrackVariant)
+        } else {
+            track = buildAudioTrack(minBuf, lowLatency = true, commRoute = false)
+        }
         if (track.state != AudioTrack.STATE_INITIALIZED) {
-            Log.w(TAG, "Low-latency track not initialized for the new route; plain fallback")
+            Log.w(TAG, "Track not initialized for the new route; plain fallback")
             track.release()
-            track = buildAudioTrack(minBuf, lowLatency = false, commRoute = commRoute)
+            track = if (commRoute) {
+                buildCommAudioTrack(minBuf, COMM_TRACK_VARIANT_COUNT - 1)
+            } else {
+                buildAudioTrack(minBuf, lowLatency = false, commRoute = false)
+            }
         }
         track.play()
         synchronized(trackSwapLock) { audioTrack = track }
@@ -1015,7 +1037,39 @@ class AudioBridge(
                 }
             }.start()
         }
-        Log.i(TAG, "Playback track rebuilt for ${if (commRoute) "comm" else "media"} route")
+        Log.i(
+            TAG,
+            "Playback track rebuilt for ${if (commRoute) "comm" else "media"} route " +
+                "(${if (commRoute) "variant=$commTrackVariant" else "audio"})",
+        )
+    }
+
+    /**
+     * Comm-route voice track, one ladder step per variant:
+     * 0 = attributes USAGE_VOICE_COMMUNICATION + low-latency performance,
+     * 1 = same attributes without the performance mode,
+     * 2 = legacy STREAM_VOICE_CALL constructor.
+     * Some ROMs initialize 0/1 fine but never consume them (frozen head);
+     * the playback loop walks the ladder on the frozen-head fingerprint.
+     */
+    private fun buildCommAudioTrack(minBuf: Int, variant: Int): AudioTrack {
+        return if (variant >= 2) {
+            buildLegacyVoiceTrack(minBuf)
+        } else {
+            buildAudioTrack(minBuf, lowLatency = variant == 0, commRoute = true)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun buildLegacyVoiceTrack(minBuf: Int): AudioTrack {
+        return AudioTrack(
+            AudioManager.STREAM_VOICE_CALL,
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            maxOf(minBuf, FRAME_SIZE_BYTES * TRACK_BUFFER_FRAMES),
+            AudioTrack.MODE_STREAM,
+        )
     }
 
     /**
@@ -1154,13 +1208,24 @@ class AudioBridge(
                         nowMs - headWatchSince > FROZEN_HEAD_TIMEOUT_MS &&
                         nowMs - lastWriteAt < 1000
                     ) {
-                        Log.e(
-                            TAG,
-                            "Playback head frozen under sustained writes — comm track not consuming; forcing media fallback",
-                        )
                         headWatchValue = -1L
                         headWatchSince = 0L
-                        routeManager.forceMediaFallback("playback head frozen (comm track)")
+                        if (commTrackVariant < COMM_TRACK_VARIANT_COUNT - 1) {
+                            // Dead track on this ROM — walk the construction
+                            // ladder before surrendering the headset
+                            commTrackVariant++
+                            Log.w(
+                                TAG,
+                                "Comm track not consuming; retrying variant $commTrackVariant",
+                            )
+                            rebuildTrackForRoute(commRoute = true)
+                        } else {
+                            Log.e(
+                                TAG,
+                                "All comm track variants dead — forcing media fallback",
+                            )
+                            routeManager.forceMediaFallback("playback head frozen (comm track)")
+                        }
                     }
                 } else {
                     headWatchValue = -1L
@@ -1447,6 +1512,7 @@ class AudioBridge(
                     "mode=${audioManager.mode} " +
                     "suspended=$outputSuspendedByFocus ducked=$duckedByFocus " +
                     "route=${if (commRouteActive) "comm" else "media"} commDev=$commDevType " +
+                    "variant=$commTrackVariant " +
                     "discard[susp=$discardSuspended outMuted=$discardOutputMuted gain0=$discardGainZero userMuted=$discardMutedUser] " +
                     "writeFail=$writeFailCount",
             )
