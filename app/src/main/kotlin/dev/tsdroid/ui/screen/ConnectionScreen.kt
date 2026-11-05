@@ -152,28 +152,15 @@ fun ConnectionScreen(
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { result ->
-        // BLUETOOTH_CONNECT 不是可选项：缺授权时部分 ROM 会接受
-        // setCommunicationDevice() 却从不建立 SCO，耳机麦/听音静默退回手机侧。
-        // 明确告知用户，而不是背后降级
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            result[Manifest.permission.BLUETOOTH_CONNECT] == false
-        ) {
-            scope.launch {
-                snackbarHostState.showSnackbar(context.getString(R.string.bluetooth_permission_missing))
-            }
-        }
+    ) { _ ->
+        // Permission results are advisory: capture start reports a missing
+        // RECORD_AUDIO explicitly, and notification denial only hides status
     }
 
     LaunchedEffect(Unit) {
         val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Bluetooth headset routing reads device names/enumeration; a
-            // denial only hides the headset name, the route still works
-            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
         }
         permissionLauncher.launch(permissions.toTypedArray())
         viewModel.resumeExistingConnection(onConnected)

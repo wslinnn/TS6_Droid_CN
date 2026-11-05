@@ -373,25 +373,14 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
 
     private fun startServiceForeground() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            try {
-                startForeground(NOTIFICATION_ID, buildNotification(), foregroundServiceType(phoneCall = true))
-            } catch (e: SecurityException) {
-                // phoneCall 类型在 Android 14+ 需要 MANAGE_OWN_CALLS；声明缺失或被 ROM
-                // 收走时不能因此起不来服务——降级为其余类型继续
-                Log.w(TAG, "phoneCall foreground type rejected; retrying without it", e)
-                startForeground(NOTIFICATION_ID, buildNotification(), foregroundServiceType(phoneCall = false))
-            }
+            startForeground(NOTIFICATION_ID, buildNotification(), foregroundServiceType())
         } else {
             startForeground(NOTIFICATION_ID, buildNotification())
         }
     }
 
-    private fun foregroundServiceType(phoneCall: Boolean): Int {
+    private fun foregroundServiceType(): Int {
         var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-        if (phoneCall) {
-            // 通话应用身份：部分 ROM 的音频策略据此决定通信路由与 voice 输出归属
-            type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
-        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         }

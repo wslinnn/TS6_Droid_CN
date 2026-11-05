@@ -16,7 +16,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import dev.tsdroid.bridge.AudioRouteState
 import dev.tsdroid.bridge.QualitySnapshot
 import dev.tsdroid.han.R
 import dev.tslib.BBCode
@@ -30,7 +29,6 @@ fun ServerInfoSheet(
     info: ServerInfo?,
     address: String?,
     quality: QualitySnapshot?,
-    micRoute: AudioRouteState,
     onDismiss: () -> Unit,
 ) {
     if (info == null) return
@@ -72,15 +70,6 @@ fun ServerInfoSheet(
                     text = stringResource(R.string.quality_section),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                InfoRow(
-                    stringResource(R.string.mic_source),
-                    when (val route = micRoute) {
-                        is AudioRouteState.Comm ->
-                            stringResource(R.string.mic_source_bluetooth, route.deviceName)
-                        AudioRouteState.Media ->
-                            stringResource(R.string.mic_source_phone)
-                    },
                 )
                 InfoRow(
                     stringResource(R.string.quality_rtt),
