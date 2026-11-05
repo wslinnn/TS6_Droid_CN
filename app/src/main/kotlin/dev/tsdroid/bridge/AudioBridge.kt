@@ -262,11 +262,7 @@ class AudioBridge(
      */
     private val recorderStopper = RecorderStopper()
 
-    /**
-     * AudioTrack swaps follow the same discipline as capture swaps: the
-     * field swap is atomic, the native release happens off the swap path,
-     * and the playback loop tolerates one failed write during a switch.
-     */
+    /** Guards [audioTrack] against release while the playback loop reads it. */
     private val trackSwapLock = Any()
 
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -892,9 +888,9 @@ class AudioBridge(
         )
         audioTrack = buildAudioTrack(minBuf, lowLatency = true)
         if (audioTrack?.state != AudioTrack.STATE_INITIALIZED) {
-            // Some devices reject PERFORMANCE_MODE_LOW_LATENCY for voice-usage
-            // tracks — fall back to a plain track rather than going silent
-            Log.w(TAG, "Low-latency voice track not initialized; retrying without performance mode")
+            // Some devices reject PERFORMANCE_MODE_LOW_LATENCY — fall back to
+            // a plain track rather than going silent
+            Log.w(TAG, "Low-latency track not initialized; retrying without performance mode")
             audioTrack?.release()
             audioTrack = buildAudioTrack(minBuf, lowLatency = false)
         }
@@ -1248,8 +1244,7 @@ class AudioBridge(
             // each); -1 means no live AEC or a pre-counter native library
             val sanDelta = readEchoZeroedDelta()
             // Real capture route as reported by the framework (-1 unknown):
-            // distinguishes the headset mic from a silent fallback to the
-            // phone mic, which our own bookkeeping cannot tell apart
+            // shows which input device the recorder actually landed on
             val recRouteType = try {
                 audioRecord?.routedDevice?.type ?: -1
             } catch (_: Throwable) {
@@ -1359,8 +1354,8 @@ class AudioBridge(
         queueDelaySampleCount++
     }
 
-    private fun shortsToBytes(shorts: ShortArray, length: Int = shorts.size): ByteArray {
-        val n = length.coerceIn(0, shorts.size)
+    private fun shortsToBytes(shorts: ShortArray): ByteArray {
+        val n = shorts.size
         val bytes = ByteArray(n * 2)
         for (i in 0 until n) {
             bytes[i * 2] = (shorts[i].toInt() and 0xFF).toByte()
