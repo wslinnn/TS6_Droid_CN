@@ -352,6 +352,34 @@
 
 ---
 
+## 已知限制
+
+### 蓝牙耳机麦克风不可用（仅作输出）
+
+当前版本蓝牙耳机只用于听音（A2DP 高音质），麦克风固定为手机麦克风。
+
+经典蓝牙的 A2DP（单向高音质）与 HFP/SCO（双向电话音质）互斥。启用耳机麦克风需要把
+音频切到通信路由、由系统建立 SCO 音频通路。本项目实现过该路径，但未能在实测设备上
+产生可用的音频通路。
+
+可直接观测到的事实：
+
+- SCO 状态广播为 `CONNECTED`，`AudioManager` 的 mode 与 communicationDevice 回读正确
+- `AudioTrack` / `AudioRecord` 的 `getRoutedDevice()` 均返回耳机
+- `AudioTrack` 的 playState 为 `PLAYING`，但 playback head 始终为 0、underruns 始终为 0
+- 采集到的数据全为零
+- 同一设备上，蜂窝电话与微信语音通话中耳机麦克风可用（两者都会建立 SCO 通信通路）；
+  系统录音机使用手机麦克风——普通录音不建立 SCO，属预期行为，不作为对照
+
+即：应用侧的请求与回读都成功，但输出没有被消费、输入没有数据。根因尚未定位，
+现有观测无法区分问题出在调用组合与时序、应用身份相关的系统判定、音频通路建立过程，
+还是其他环节。
+
+修复切入点、已排除的假设与系统级取证命令见
+[BLUETOOTH-HEADSET-MIC.md](BLUETOOTH-HEADSET-MIC.md)。
+
+---
+
 ## 签名与发布
 
 正式发布由 GitHub Actions 完成：推送 `vX.Y.Z-Han` 格式的 tag，[android-release.yml](.github/workflows/android-release.yml) 会自动运行单元测试、用仓库 Secrets 中的证书签名构建 Release APK，并创建正式 GitHub Release——应用内「检查更新」读取的就是该 Release。
