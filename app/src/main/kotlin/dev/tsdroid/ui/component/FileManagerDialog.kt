@@ -82,6 +82,7 @@ fun FileManagerDialog(
     isLoading: Boolean,
     users: List<User>,
     permissionHints: Long = 0L,
+    permissionHintsKnown: Boolean = false,
     onNavigateToFolder: (String) -> Unit,
     onNavigateUp: () -> Unit,
     onRefresh: () -> Unit,
@@ -94,15 +95,15 @@ fun FileManagerDialog(
     onDismiss: () -> Unit,
     onPreviewImage: (String) -> Unit = {},
 ) {
-    // Permission flags — write operations require explicit permission bits.
-    // When permissionHints == 0 (server didn't send hints), hide write buttons.
-    // Download/browse are always allowed (CommandError toast handles denials).
-    val canUpload = (permissionHints and Channel.PERM_FILE_UPLOAD) != 0L
-    val canDelete = (permissionHints and Channel.PERM_FILE_DELETE) != 0L
-    val canRename = (permissionHints and Channel.PERM_FILE_RENAME) != 0L
-    val canCreateDir = (permissionHints and Channel.PERM_FILE_DIRECTORY_CREATE) != 0L
-    val hasHints = permissionHints != 0L
-    val canDownload = !hasHints || (permissionHints and Channel.PERM_FILE_DOWNLOAD) != 0L
+    // Permission flags. With permissionHintsKnown=false a zero hint set means
+    // "unknown" (server didn't report), not "denied": write buttons stay
+    // hidden, download/browse stay available (CommandError toast handles
+    // denials). With known=true the bits are authoritative.
+    val canUpload = permissionHintsKnown && (permissionHints and Channel.PERM_FILE_UPLOAD) != 0L
+    val canDelete = permissionHintsKnown && (permissionHints and Channel.PERM_FILE_DELETE) != 0L
+    val canRename = permissionHintsKnown && (permissionHints and Channel.PERM_FILE_RENAME) != 0L
+    val canCreateDir = permissionHintsKnown && (permissionHints and Channel.PERM_FILE_DIRECTORY_CREATE) != 0L
+    val canDownload = !permissionHintsKnown || (permissionHints and Channel.PERM_FILE_DOWNLOAD) != 0L
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<String?>(null) }
     var deleteTarget by remember { mutableStateOf<String?>(null) }

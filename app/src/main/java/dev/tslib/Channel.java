@@ -9,7 +9,12 @@ public class Channel {
     public final String name;
     public final String topic;
     public final String description;
-    public final int order;
+    /**
+     * Predecessor channel id in the server's sort chain (0 = first channel
+     * of the sibling list). Not a numeric sort key — build the sibling order
+     * by following the chain (see {@link ChannelTree}).
+     */
+    public final long order;
     public final boolean isPermanent;
     public final boolean isSemiPermanent;
     public final boolean isDefault;
@@ -21,6 +26,11 @@ public class Channel {
     public final int neededTalkPower;
     public final long iconId;
     public final long permissionHints;
+    /**
+     * True when {@link #permissionHints} came from the server or a successful
+     * permission query. When false, zero bits mean "unknown", not "denied".
+     */
+    public final boolean permissionHintsKnown;
 
     // Permission hint bit flags
     public static final long PERM_FILE_UPLOAD = 64;
@@ -31,11 +41,12 @@ public class Channel {
     public static final long PERM_FILE_DIRECTORY_CREATE = 2048;
 
     public Channel(long id, long parentId, String name, String topic,
-                   String description, int order, boolean isPermanent,
+                   String description, long order, boolean isPermanent,
                    boolean isSemiPermanent, boolean isDefault,
                    boolean hasPassword, byte codec, byte codecQuality,
                    int maxClients, int maxFamilyClients,
-                   int neededTalkPower, long iconId, long permissionHints) {
+                   int neededTalkPower, long iconId, long permissionHints,
+                   boolean permissionHintsKnown) {
         this.id = id;
         this.parentId = parentId;
         this.name = name;
@@ -53,41 +64,31 @@ public class Channel {
         this.neededTalkPower = neededTalkPower;
         this.iconId = iconId;
         this.permissionHints = permissionHints;
-    }
-
-    public Channel(long id, long parentId, String name, String topic,
-                   String description, int order, boolean isPermanent,
-                   boolean isSemiPermanent, boolean isDefault,
-                   boolean hasPassword, byte codec, byte codecQuality,
-                   int maxClients, int maxFamilyClients,
-                   int neededTalkPower, long iconId) {
-        this(id, parentId, name, topic, description, order, isPermanent,
-             isSemiPermanent, isDefault, hasPassword, codec, codecQuality,
-             maxClients, maxFamilyClients, neededTalkPower, iconId, 0L);
+        this.permissionHintsKnown = permissionHintsKnown;
     }
 
     public boolean canUploadFile() {
-        return (permissionHints & PERM_FILE_UPLOAD) != 0;
+        return permissionHintsKnown && (permissionHints & PERM_FILE_UPLOAD) != 0;
     }
 
     public boolean canDownloadFile() {
-        return (permissionHints & PERM_FILE_DOWNLOAD) != 0;
+        return !permissionHintsKnown || (permissionHints & PERM_FILE_DOWNLOAD) != 0;
     }
 
     public boolean canDeleteFile() {
-        return (permissionHints & PERM_FILE_DELETE) != 0;
+        return permissionHintsKnown && (permissionHints & PERM_FILE_DELETE) != 0;
     }
 
     public boolean canRenameFile() {
-        return (permissionHints & PERM_FILE_RENAME) != 0;
+        return permissionHintsKnown && (permissionHints & PERM_FILE_RENAME) != 0;
     }
 
     public boolean canBrowseFiles() {
-        return (permissionHints & PERM_FILE_BROWSE) != 0;
+        return !permissionHintsKnown || (permissionHints & PERM_FILE_BROWSE) != 0;
     }
 
     public boolean canCreateDirectory() {
-        return (permissionHints & PERM_FILE_DIRECTORY_CREATE) != 0;
+        return permissionHintsKnown && (permissionHints & PERM_FILE_DIRECTORY_CREATE) != 0;
     }
 
     @Override

@@ -360,6 +360,17 @@ class TsClient {
         when (event.type) {
             "disconnected" -> _state.value = ConnectionState.DISCONNECTED
             "connected" -> _state.value = ConnectionState.CONNECTED
+            // tslib 0.2.0 reconnect flow: a temporary drop emits
+            // connection_lost and the native layer reconnects on its own;
+            // only a permanent loss still emits "disconnected"
+            "connection_lost" -> _state.value = ConnectionState.RECONNECTING
+            "reconnected" -> _state.value = ConnectionState.CONNECTED
+            // Watchdog ping while the native reconnect keeps retrying —
+            // informational only, the state stays RECONNECTING
+            "connection_stalled" -> {
+                val silentForMs = (event.data["silent_for_ms"] as? Number)?.toLong() ?: 0L
+                Log.w(TAG, "Connection stalled: no server traffic for ${silentForMs}ms, still reconnecting")
+            }
             "file_downloaded" -> {
                 val path = event.data["path"] as? String ?: return
                 val data = event.data["data"] as? ByteArray ?: return

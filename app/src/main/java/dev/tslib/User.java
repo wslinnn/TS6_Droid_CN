@@ -30,6 +30,10 @@ public class User {
     public final String description;
     public final String avatarId;
     public final long iconId;
+    /** Account creation time in unix seconds, or null when unavailable. */
+    public final Long createdAt;
+    /** Last connection time in unix seconds, or null when unavailable. */
+    public final Long lastConnectedAt;
 
     public User(int id, String uid, long databaseId, long channelId,
                 String nickname, byte clientType, boolean isTalking,
@@ -41,7 +45,8 @@ public class User {
                 long[] serverGroups, long channelGroup,
                 String platform, String version,
                 String country, String description,
-                String avatarId, long iconId) {
+                String avatarId, long iconId,
+                Long createdAt, Long lastConnectedAt) {
         this.id = id;
         this.uid = uid;
         this.databaseId = databaseId;
@@ -68,24 +73,8 @@ public class User {
         this.description = description;
         this.avatarId = avatarId;
         this.iconId = iconId;
-    }
-
-    public User(int id, String uid, long databaseId, long channelId,
-                String nickname, byte clientType, boolean isTalking,
-                boolean isInputMuted, boolean isOutputMuted,
-                boolean hasInputHardware, boolean hasOutputHardware,
-                boolean isAway, boolean isRecording,
-                boolean isPrioritySpeaker, boolean isChannelCommander,
-                boolean isTalker, int talkPower, String awayMessage,
-                long[] serverGroups, long channelGroup,
-                String platform, String version,
-                String country, String description,
-                String avatarId) {
-        this(id, uid, databaseId, channelId, nickname, clientType, isTalking,
-             isInputMuted, isOutputMuted, hasInputHardware, hasOutputHardware,
-             isAway, isRecording, isPrioritySpeaker, isChannelCommander,
-             isTalker, talkPower, awayMessage, serverGroups, channelGroup,
-             platform, version, country, description, avatarId, 0L);
+        this.createdAt = createdAt;
+        this.lastConnectedAt = lastConnectedAt;
     }
 
     /**

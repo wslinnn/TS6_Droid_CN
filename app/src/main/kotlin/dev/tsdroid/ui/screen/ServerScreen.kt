@@ -568,7 +568,8 @@ fun ServerScreen(
                         files = fileList,
                         isLoading = fileManagerLoading,
                         users = users.filter { it.id != viewModel.myClientId },
-                        permissionHints = channelPermissions,
+                        permissionHints = channelPermissions.hints,
+                        permissionHintsKnown = channelPermissions.known,
                         onNavigateToFolder = { viewModel.navigateToFolder(it) },
                         onNavigateUp = { viewModel.navigateUp() },
                         onRefresh = { viewModel.refreshFileList() },
@@ -638,7 +639,8 @@ fun ServerScreen(
                         unreadPrivatePerUser = unreadPrivate,
                         showLinkThumbnails = showLinkThumbnails,
                         autoLoadImages = autoLoadImages,
-                        canUploadFiles = (channelPermissions and dev.tslib.Channel.PERM_FILE_UPLOAD) != 0L,
+                        canUploadFiles = channelPermissions.known &&
+                            (channelPermissions.hints and dev.tslib.Channel.PERM_FILE_UPLOAD) != 0L,
                         onUploadFile = { fileName, data ->
                             viewModel.uploadAndSendFile(fileName, data, chatTab == 1, pmTargetKey)
                         },

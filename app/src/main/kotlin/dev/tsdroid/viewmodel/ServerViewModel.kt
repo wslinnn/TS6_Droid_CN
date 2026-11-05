@@ -81,6 +81,20 @@ sealed class DownloadState {
     data class Error(val message: String) : DownloadState()
 }
 
+/**
+ * Current channel's file permission hints plus whether the server actually
+ * reported them. With known=false a zero [hints] means "unknown", not
+ * "denied" — UI must hide write operations but may still offer downloads.
+ */
+data class ChannelPermissionState(
+    val hints: Long = 0L,
+    val known: Boolean = false,
+) {
+    companion object {
+        val UNKNOWN = ChannelPermissionState()
+    }
+}
+
 class ServerViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private const val TAG = "ServerViewModel"
@@ -161,7 +175,8 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     private val _channels = MutableStateFlow<List<Channel>>(emptyList())
     val channels: StateFlow<List<Channel>> = _channels.asStateFlow()
 
-    // Raw users from the server (isTalking always false in snapshots)
+    // Raw users from the server (isTalking is maintained natively since
+    // tslib 0.2.0 — snapshots reflect the live talk state)
     private val _rawUsers = MutableStateFlow<List<User>>(emptyList())
 
     // Set of currently talking user IDs (tracked via talk_status events)
@@ -307,11 +322,15 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     val fileManagerLoading: StateFlow<Boolean> = _fileManagerLoading.asStateFlow()
 
     /** Permission hints for the current channel (bitflags from Channel.PERM_*) */
-    val currentChannelPermissions: StateFlow<Long> = combine(_channels, _rawUsers) { channels, users ->
-        val myId = tsClient?.clientId ?: return@combine 0L
-        val channelId = users.find { it.id == myId }?.channelId ?: return@combine 0L
-        channels.find { it.id == channelId }?.permissionHints ?: 0L
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, 0L)
+    val currentChannelPermissions: StateFlow<ChannelPermissionState> =
+        combine(_channels, _rawUsers) { channels, users ->
+            val myId = tsClient?.clientId ?: return@combine ChannelPermissionState.UNKNOWN
+            val channelId = users.find { it.id == myId }?.channelId
+                ?: return@combine ChannelPermissionState.UNKNOWN
+            channels.find { it.id == channelId }?.let {
+                ChannelPermissionState(it.permissionHints, it.permissionHintsKnown)
+            } ?: ChannelPermissionState.UNKNOWN
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, ChannelPermissionState.UNKNOWN)
 
     // Track which channels we've already queried permissions for
     private val queriedPermChannels = mutableSetOf<Long>()
@@ -342,7 +361,11 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
 
                 users.map { user ->
                     val isLocallyTalking = (user.id == myId && localTalking)
-                    val isRemoteTalking = user.id in pruned
+                    // The native layer maintains isTalking itself since
+                    // tslib 0.2.0 (talk events + audio); the event-derived
+                    // set stays as fallback for talk bursts whose stop
+                    // event got dropped
+                    val isRemoteTalking = user.id in pruned || user.isTalking
                     val shouldBeTalking = isLocallyTalking || isRemoteTalking
 
                     if (shouldBeTalking && !user.isTalking) user.withTalking(true)
@@ -351,16 +374,18 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }.collect { _users.value = it }
         }
-        // When current channel changes, query permissions if not already known
+        // When current channel changes, query permissions if the server has
+        // not reported them yet (known=false — zero bits then mean unknown,
+        // not denied)
         viewModelScope.launch {
             combine(_channels, _rawUsers) { channels, users ->
                 val myId = tsClient?.clientId ?: return@combine null
                 val channelId = users.find { it.id == myId }?.channelId ?: return@combine null
-                val hints = channels.find { it.id == channelId }?.permissionHints ?: 0L
-                channelId to hints
+                val known = channels.find { it.id == channelId }?.permissionHintsKnown ?: false
+                channelId to known
             }.collect { pair ->
-                val (channelId, hints) = pair ?: return@collect
-                if (hints == 0L && channelId !in queriedPermChannels) {
+                val (channelId, known) = pair ?: return@collect
+                if (!known && channelId !in queriedPermChannels) {
                     queriedPermChannels.add(channelId)
                     Log.i(TAG, "No permission hints for channel $channelId, querying permoverview...")
                     try {
@@ -1564,4 +1589,5 @@ private fun User.withTalking(talking: Boolean): User = User(
     isAway, isRecording, isPrioritySpeaker, isChannelCommander, isTalker,
     talkPower, awayMessage, serverGroups, channelGroup,
     platform, version, country, description, avatarId, iconId,
+    createdAt, lastConnectedAt,
 )

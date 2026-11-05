@@ -14,6 +14,7 @@ class NicknameCollisionTest {
         false, false, false, false, false,
         0, null, longArrayOf(), 0L,
         null, null, null, null, null, 0L,
+        null, null,
     )
 
     @Test

@@ -1,7 +1,7 @@
 package dev.tslib;
 
 /**
- * Software acoustic echo canceller (speexdsp-based, runs entirely in-process).
+ * Software acoustic echo canceller (WebRTC AEC3, runs entirely in-process).
  *
  * <p>Removes loudspeaker echo from the microphone signal by adaptively
  * modelling the acoustic path between the playback reference (the exact PCM
