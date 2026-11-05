@@ -7,7 +7,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -42,15 +41,51 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeStyle
+import dev.chrisbanes.haze.HazeTint
 
 /**
- * 底部悬浮胶囊 Tab Bar（iOS 风格，参考上游终版实现）：
+ * 悬浮玻璃底板色（bar 与 trailing 圆钮共用）：API 31+ 走实时背板模糊时只
+ * 取其「薄罩」语义（tint 仍在 [floatingGlassHazeStyle]），API 29/30 无
+ * RenderEffect，回退为这张中高不透明度纯色底板——透色为主、不透形。
+ */
+@Composable
+internal fun floatingGlassPaneColor(dark: Boolean): Color =
+    if (dark) MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.62f)
+    else Color.White.copy(alpha = 0.66f)
+
+/** 实时背板模糊样式：28dp 强模糊 + 薄白罩 + 微噪点——糊而不白，透出背景色。 */
+@Composable
+internal fun floatingGlassHazeStyle(dark: Boolean): HazeStyle =
+    if (dark) {
+        HazeStyle(
+            backgroundColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tints = listOf(
+                HazeTint(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.50f)),
+            ),
+            blurRadius = 28.dp,
+            noiseFactor = 0.03f,
+        )
+    } else {
+        HazeStyle(
+            backgroundColor = Color.White,
+            tints = listOf(HazeTint(Color.White.copy(alpha = 0.42f))),
+            blurRadius = 28.dp,
+            noiseFactor = 0.03f,
+        )
+    }
+
+/**
+ * 底部悬浮胶囊 Tab Bar（液态玻璃风格，参考上游终版实现）：
  *
  * 覆盖在内容之上、不占布局高度——内容由调用方负责补足底边距让最后一行
- * 可达。选中态白胶囊用弹簧动画在条目之间滑动；材质走 [GlassSurface]
- * （投影抬升 + 磨砂底 + 内阴影/高光/发丝），壁纸关闭时回退为实底胶囊。
+ * 可达。选中态胶囊用弹簧动画在条目之间滑动，无边框、只有亮度微差；材质
+ * 走 [GlassSurface]：API 31+ 为实时背板模糊（传入 [hazeState] 时），其余
+ * 回退为高不透明度纯色底板。
  *
  * 「胶囊」永远锚定容器底部居中，「trailing」（如独立的加号圆钮）单独锚定
  * 容器右下角——两者互为兄弟层，trailing 的出现/消失不会移动胶囊。
@@ -71,6 +106,7 @@ fun FloatingTabBar(
     itemWidth: Dp = 92.dp,
     horizontalMargin: Dp = 16.dp,
     gap: Dp = 14.dp,
+    hazeState: HazeState? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     if (items.isEmpty()) return
@@ -96,13 +132,11 @@ fun FloatingTabBar(
         )
         val contentColor = MaterialTheme.colorScheme.onSurface
 
-        // bar 底板材：半透明奶白——身后的内容（列表条目）直接透出，内容
-        // 之下才是壁纸；明确不采样壁纸（bar 不是壁纸的一部分）
-        val paneColor = if (dark) {
-            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f)
-        } else {
-            Color.White.copy(alpha = 0.55f)
-        }
+        // bar 底板材：API 31+ 实时模糊（身后的滚动内容实时糊化）；低版本
+        // 回退高不透明度纯色——透色不透形。明确不采样壁纸（bar 不是壁纸的
+        // 一部分）
+        val paneColor = floatingGlassPaneColor(dark)
+        val hazeStyle = floatingGlassHazeStyle(dark)
 
         // 胶囊：定死底部居中——trailing 的有无不改变它的位置
         Box(
@@ -114,11 +148,14 @@ fun FloatingTabBar(
             GlassSurface(
                 wallpaper = wallpaper,
                 shape = CircleShape,
-                elevation = 10.dp,
+                elevation = 14.dp,
                 paneColor = paneColor,
+                hazeState = hazeState,
+                hazeStyle = hazeStyle,
                 modifier = Modifier.fillMaxSize(),
             ) {
-                // 选中态白胶囊：底板之上、条目之下，同材质的一块更亮玻璃
+                // 选中态胶囊：底板之上、条目之下，无边框的亮度微差——薄薄
+                // 一层顶部略亮的渐变，读作玻璃上的一块高光而非描边圈
                 Box(
                     modifier = Modifier
                         .align(Alignment.CenterStart)
@@ -126,11 +163,18 @@ fun FloatingTabBar(
                         .width(slotWidth - pillInset * 2)
                         .height(barHeight - 12.dp)
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = if (dark) 0.22f else 0.34f))
-                        .border(
-                            width = 0.75.dp,
-                            color = MaterialTheme.colorScheme.outlineVariant,
-                            shape = CircleShape,
+                        .background(
+                            if (dark) {
+                                Brush.verticalGradient(
+                                    0f to Color.White.copy(alpha = 0.22f),
+                                    1f to Color.White.copy(alpha = 0.12f),
+                                )
+                            } else {
+                                Brush.verticalGradient(
+                                    0f to Color.White.copy(alpha = 0.40f),
+                                    1f to Color.White.copy(alpha = 0.26f),
+                                )
+                            },
                         ),
                 )
 

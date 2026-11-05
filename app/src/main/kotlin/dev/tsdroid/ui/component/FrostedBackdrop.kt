@@ -1,5 +1,6 @@
 package dev.tsdroid.ui.component
 
+import android.os.Build
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -43,6 +44,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeStyle
+import dev.chrisbanes.haze.hazeEffect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -366,10 +370,39 @@ fun Modifier.frostedBackdrop(
 }
 
 /**
+ * 实时模糊路径的玻璃装饰（画在内容之下）：顶部高光带 + 底缘内阴影，与
+ * [frostedBackdrop] decorations 的语义一致，供 hazeEffect 之后叠加，使
+ * API 31+ 模糊底板拥有与非模糊路径相同的受光细节。
+ */
+private fun Modifier.glassInnerDecorations(dark: Boolean): Modifier =
+    drawWithContent {
+        val topHighlight = if (dark) 0.18f else 0.15f
+        val insetShadow = if (dark) 0.12f else 0.07f
+        drawRect(
+            brush = Brush.verticalGradient(
+                0f to Color.White.copy(alpha = topHighlight),
+                0.22f to Color.Transparent,
+            ),
+        )
+        drawRect(
+            brush = Brush.verticalGradient(
+                0.62f to Color.Transparent,
+                1f to Color.Black.copy(alpha = insetShadow),
+            ),
+        )
+        drawContent()
+    }
+
+/**
  * 玻璃面板（完整材质）：投影抬升浮出内容 + 剪裁 + 磨砂底 + 内阴影/高光 +
- * 发丝描边。缺省从壁纸采样磨砂；[paneColor] 指定时改为「半透明奶白底板」
- * ——不采样壁纸，身后的内容先透过来、内容之下才是壁纸（悬浮 bar 语义）。
- * 无壁纸也无奶白时回退为 [backgroundColor] 的实底面板，仍读作一个表面。
+ * 不对称受光描边（顶亮底暗的对角渐变，读作被顶光照亮的玻璃体积）。
+ * 缺省从壁纸采样磨砂；[paneColor] 指定时改为「半透明底板」——不采样壁纸，
+ * 身后的内容先透过来、内容之下才是壁纸（悬浮 bar 语义）。无壁纸也无底板
+ * 色时回退为 [backgroundColor] 的实底面板，仍读作一个表面。
+ *
+ * [hazeState] 与 [hazeStyle] 同时给出且系统为 API 31+ 时走实时背板模糊
+ * （hazeEffect，身后的滚动内容实时糊化）；低版本系统自动落回既有
+ * 磨砂/底板路径，调用方无需区分。
  *
  * 内容色不做改写：子项按各自既有配色绘制（如需自适应亮度由调用方处理）。
  */
@@ -381,22 +414,26 @@ fun GlassSurface(
     elevation: Dp = 10.dp,
     backgroundColor: Color = MaterialTheme.colorScheme.surfaceContainer,
     paneColor: Color? = null,
+    hazeState: HazeState? = null,
+    hazeStyle: HazeStyle? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val dark = isSystemInDarkTheme()
-    val hairline = if (dark) {
+    val rim = if (dark) {
         Brush.linearGradient(
-            0f to Color.White.copy(alpha = 0.30f),
+            0f to Color.White.copy(alpha = 0.32f),
             0.55f to Color.White.copy(alpha = 0.06f),
-            1f to Color.White.copy(alpha = 0.16f),
+            1f to Color.Black.copy(alpha = 0.20f),
         )
     } else {
         Brush.linearGradient(
-            0f to Color.Black.copy(alpha = 0.12f),
-            0.55f to Color.Black.copy(alpha = 0.04f),
-            1f to Color.Black.copy(alpha = 0.08f),
+            0f to Color.White.copy(alpha = 0.65f),
+            0.55f to Color.White.copy(alpha = 0.08f),
+            1f to Color.Black.copy(alpha = 0.10f),
         )
     }
+    val useHaze = hazeState != null && hazeStyle != null &&
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
     Box(
         modifier = modifier
@@ -404,18 +441,25 @@ fun GlassSurface(
                 elevation = elevation,
                 shape = shape,
                 clip = false,
-                ambientColor = Color.Black.copy(alpha = 0.22f),
-                spotColor = Color.Black.copy(alpha = 0.25f),
+                ambientColor = Color.Black.copy(alpha = 0.16f),
+                spotColor = Color.Black.copy(alpha = 0.20f),
             )
             .clip(shape)
-            .frostedBackdrop(
-                wallpaper = wallpaper,
-                shape = shape,
-                fallbackColor = backgroundColor,
-                decorations = true,
-                paneColor = paneColor,
+            .then(
+                when {
+                    useHaze -> Modifier
+                        .hazeEffect(state = hazeState, style = hazeStyle)
+                        .glassInnerDecorations(dark)
+                    else -> Modifier.frostedBackdrop(
+                        wallpaper = wallpaper,
+                        shape = shape,
+                        fallbackColor = backgroundColor,
+                        decorations = true,
+                        paneColor = paneColor,
+                    )
+                }
             )
-            .border(0.75.dp, hairline, shape),
+            .border(1.dp, rim, shape),
     ) {
         content()
     }

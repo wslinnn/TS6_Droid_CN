@@ -84,6 +84,8 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.tsdroid.han.R
 import dev.tslib.ConnectionState
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.hazeSource
 import dev.tsdroid.ui.component.AnimeBackground
 import dev.tsdroid.ui.component.AnimeWallpaperState
 import dev.tsdroid.ui.component.ChannelTree
@@ -91,6 +93,8 @@ import dev.tsdroid.ui.component.FloatingTabBar
 import dev.tsdroid.ui.component.FloatingTabItem
 import dev.tsdroid.ui.component.GlassSurface
 import dev.tsdroid.ui.component.WallpaperGeometry
+import dev.tsdroid.ui.component.floatingGlassHazeStyle
+import dev.tsdroid.ui.component.floatingGlassPaneColor
 import dev.tsdroid.viewmodel.ConnectionViewModel
 import kotlinx.coroutines.launch
 
@@ -132,6 +136,9 @@ fun ConnectionScreen(
     val isBrowsing by viewModel.isBrowsing.collectAsStateWithLifecycle()
     val showChannelPicker by viewModel.showChannelPicker.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    // 背板模糊源：内容盒（背景+列表）打 hazeSource，悬浮玻璃层打 hazeEffect。
+    // bar 必须留在源节点之外（兄弟层），否则 bar 自身像素会被采样进模糊源
+    val hazeState = remember { HazeState() }
     var deleteConfirmIndex by remember { mutableStateOf<Int?>(null) }
     var showBottomSheet by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -211,53 +218,14 @@ fun ConnectionScreen(
                 )
             },
     ) {
+        // 模糊源盒：背景 + 内容区。悬浮玻璃层（bar/trailing）必须留在这个
+        // 节点之外，否则玻璃自身像素会被采样进模糊源形成反馈涂抹
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .hazeSource(hazeState),
+        ) {
         AnimeBackground(enabled = animeBackground)
-
-            // 悬浮胶囊 Tab Bar：覆盖在内容之上、不占用 Scaffold bottomBar 高度，
-            // 内容区保留整屏（列表滚到胶囊底下，最后一行靠内容自身底边距让位）
-            FloatingTabBar(
-                items = listOf(
-                    FloatingTabItem(Icons.Default.Home, stringResource(R.string.tab_home)),
-                    FloatingTabItem(Icons.Default.Settings, stringResource(R.string.tab_settings)),
-                ),
-                selectedIndex = selectedTab,
-                onSelect = { index -> selectedTab = index },
-                wallpaper = AnimeWallpaperState.activeBitmap.takeIf { animeBackground },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .zIndex(2f),
-                trailing = {
-                    // 独立"+"圆钮：唤起已有的添加服务器面板（仅主页页签显示）
-                    if (selectedTab == 0) {
-                        GlassSurface(
-                            wallpaper = AnimeWallpaperState.activeBitmap.takeIf { animeBackground },
-                            shape = CircleShape,
-                            elevation = 10.dp,
-                            paneColor = if (isSystemInDarkTheme()) {
-                                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.72f)
-                            } else {
-                                Color.White.copy(alpha = 0.55f)
-                            },
-                            backgroundColor = MaterialTheme.colorScheme.surfaceContainerHigh
-                                .copy(alpha = 0.9f),
-                            modifier = Modifier.size(52.dp),
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .clickable { showBottomSheet = true },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Icon(
-                                    Icons.Default.Add,
-                                    contentDescription = stringResource(R.string.add_server),
-                                    tint = MaterialTheme.colorScheme.onSurface,
-                                )
-                            }
-                        }
-                    }
-                },
-            )
 
             Scaffold(
             containerColor = Color.Transparent,
@@ -601,5 +569,52 @@ fun ConnectionScreen(
                 }
             }
         }
+        }
+
+        // 悬浮胶囊 Tab Bar：覆盖在内容之上、不占用 Scaffold bottomBar 高度，
+        // 内容区保留整屏（列表滚到胶囊底下，最后一行靠内容自身底边距让位）。
+        // 位于模糊源盒之外（兄弟层），API 31+ 上自身材质为实时背板模糊
+        FloatingTabBar(
+            items = listOf(
+                FloatingTabItem(Icons.Default.Home, stringResource(R.string.tab_home)),
+                FloatingTabItem(Icons.Default.Settings, stringResource(R.string.tab_settings)),
+            ),
+            selectedIndex = selectedTab,
+            onSelect = { index -> selectedTab = index },
+            wallpaper = AnimeWallpaperState.activeBitmap.takeIf { animeBackground },
+            hazeState = hazeState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .zIndex(2f),
+            trailing = {
+                // 独立"+"圆钮：唤起已有的添加服务器面板（仅主页页签显示）
+                if (selectedTab == 0) {
+                    GlassSurface(
+                        wallpaper = AnimeWallpaperState.activeBitmap.takeIf { animeBackground },
+                        shape = CircleShape,
+                        elevation = 14.dp,
+                        paneColor = floatingGlassPaneColor(isSystemInDarkTheme()),
+                        hazeState = hazeState,
+                        hazeStyle = floatingGlassHazeStyle(isSystemInDarkTheme()),
+                        backgroundColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                            .copy(alpha = 0.9f),
+                        modifier = Modifier.size(52.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clickable { showBottomSheet = true },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = stringResource(R.string.add_server),
+                                tint = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                }
+            },
+        )
     }
 }

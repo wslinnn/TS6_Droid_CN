@@ -9,6 +9,11 @@ navigationCompose = "2.8.5"
 datastore = "1.1.1"
 coroutines = "1.9.0"
 coil = "2.7.0"
+# Pinned: 1.5.1 是支持 compose-foundation 1.7.x 的最后一个版本（1.6+ 需 CMP 1.8，
+# 2.x Glass 需 CMP 1.9），BOM 2024.12.01 保持不动。其传递依赖会把 ui/foundation
+# 顶到 1.7.8（patch 级：1.7.7/1.7.8 仅 bugfix、无 API 变更，dependencyInsight 已
+# 实测确认），属预期行为。升级 BOM 时复查并考虑跟进 haze 2.x 的 Glass 折射效果。
+haze = "1.5.1"
 junit = "4.13.2"
 # Pinned: 0.34+ calls BasicText-CL7eQgs (compose-foundation 1.8 signature) and
 # crashes with NoSuchMethodError on our compose BOM 2024.12.01 (foundation 1.7.6)
@@ -35,6 +40,7 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
+haze-materials = { group = "dev.chrisbanes.haze", name = "haze-materials", version.ref = "haze" }
 mikepenz-markdown-m3 = { group = "com.mikepenz", name = "multiplatform-markdown-renderer-m3", version.ref = "mikepenzMarkdown" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
