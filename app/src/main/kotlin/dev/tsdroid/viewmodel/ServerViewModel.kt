@@ -1329,7 +1329,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     /** Native file ops are fire-and-forget: refresh shortly after, then once
      *  more in case the server was slow applying the change. */
     private fun refreshFileListAfterOperation() {
-        refreshFileListAfterOperation()
+        refreshFileList()
         viewModelScope.launch { delay(2000); refreshFileList() }
     }
 
