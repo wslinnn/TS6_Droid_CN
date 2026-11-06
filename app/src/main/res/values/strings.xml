@@ -196,6 +196,13 @@
     <string name="error_nickname_too_short">Le pseudo doit contenir au moins 3 caractères</string>
     <string name="connection_failed">Échec de la connexion</string>
     <string name="browse_failed">Échec du parcours des channels</string>
+    <string name="error_server_flooding">Trop de requêtes, réessayez dans un instant</string>
+    <string name="error_server_already_in_channel">Vous êtes déjà dans ce salon</string>
+    <string name="error_server_channel_password">Mot de passe du salon incorrect</string>
+    <string name="error_server_password">Mot de passe du serveur incorrect</string>
+    <string name="error_server_full">Le serveur est complet</string>
+    <string name="error_server_permission">Permissions insuffisantes</string>
+    <string name="error_server_banned">Vous êtes banni de ce serveur</string>
     <string name="error_overlay_permission_required">Veuillez accorder l\'autorisation « Superposition » pour la fenêtre flottante</string>
     <string name="overlay_permission_title">Autorisation de superposition requise</string>
     <string name="overlay_permission_message">La fenêtre flottante affiche votre état de parole et des commandes rapides quand vous passez à une autre application. Vous pouvez vous connecter directement (la fenêtre flottante restera désactivée, réactivable plus tard dans les paramètres), ou accorder l\'autorisation maintenant.</string>

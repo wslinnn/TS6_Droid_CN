@@ -22,6 +22,7 @@ import dev.tsdroid.bridge.nicknameWithCollisionSuffix
 import dev.tsdroid.han.R
 import dev.tsdroid.data.BookmarkStore
 import dev.tsdroid.data.ServerBookmark
+import dev.tsdroid.data.ServerErrorText
 import dev.tsdroid.data.SettingsStore
 import dev.tsdroid.service.TsConnectionService
 import dev.tslib.Channel
@@ -193,7 +194,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
             ContextCompat.startForegroundService(context, intent)
         } catch (e: Exception) {
             _connectionState.value = ConnectionState.DISCONNECTED
-            _error.value = e.message ?: getApplication<Application>().getString(R.string.connection_failed)
+            _error.value = ServerErrorText.localized(getApplication(), e.message)
+                .ifEmpty { getApplication<Application>().getString(R.string.connection_failed) }
             return
         }
 
@@ -230,8 +232,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                         onConnected()
                     } else {
                         _connectionState.value = ConnectionState.DISCONNECTED
-                        _error.value = connectionFailure.message
-                            ?: getApplication<Application>().getString(R.string.connection_failed)
+                        _error.value = ServerErrorText.localized(getApplication(), connectionFailure.message)
+                            .ifEmpty { getApplication<Application>().getString(R.string.connection_failed) }
                     }
                 } finally {
                     // reconnect() reloads the identity from disk, so this
@@ -243,7 +245,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 throw e
             } catch (e: Exception) {
                 _connectionState.value = ConnectionState.DISCONNECTED
-                _error.value = e.message ?: getApplication<Application>().getString(R.string.connection_failed)
+                _error.value = ServerErrorText.localized(getApplication(), e.message)
+                    .ifEmpty { getApplication<Application>().getString(R.string.connection_failed) }
             }
         }
     }
@@ -500,7 +503,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 browsedChannels.value = channels
                 showChannelPicker.value = true
             } catch (e: Exception) {
-                _error.value = e.message ?: getApplication<Application>().getString(R.string.browse_failed)
+                _error.value = ServerErrorText.localized(getApplication(), e.message)
+                    .ifEmpty { getApplication<Application>().getString(R.string.browse_failed) }
             } finally {
                 isBrowsing.value = false
             }

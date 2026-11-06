@@ -29,6 +29,7 @@ import dev.tsdroid.bridge.VadGate
 import dev.tsdroid.han.R
 import dev.tsdroid.data.BookmarkStore
 import dev.tsdroid.data.MessageStore
+import dev.tsdroid.data.ServerErrorText
 import dev.tsdroid.data.SettingsStore
 import dev.tsdroid.data.UserAudioStore
 import dev.tsdroid.service.ReconnectBackoff
@@ -500,9 +501,14 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 service.tsClient.chatEvents.collect { handleEvent(it) }
             }
             viewModelScope.launch {
-                service.tsClient.commandErrors.collect { message ->
+                service.tsClient.commandErrors.collect { error ->
+                    val text = ServerErrorText.localized(
+                        getApplication(),
+                        error.code,
+                        error.message,
+                    ).ifEmpty { error.message }
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(getApplication(), message, Toast.LENGTH_SHORT).show()
+                        Toast.makeText(getApplication(), text, Toast.LENGTH_SHORT).show()
                     }
                     rollbackLastPendingEcho()
                 }

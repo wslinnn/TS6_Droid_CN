@@ -195,6 +195,13 @@
     <string name="error_nickname_too_short">Nickname must be at least 3 characters long</string>
     <string name="connection_failed">Connection failed</string>
     <string name="browse_failed">Failed to browse channels</string>
+    <string name="error_server_flooding">Too many requests; please wait a moment</string>
+    <string name="error_server_already_in_channel">You are already in this channel</string>
+    <string name="error_server_channel_password">Invalid channel password</string>
+    <string name="error_server_password">Invalid server password</string>
+    <string name="error_server_full">Server is full</string>
+    <string name="error_server_permission">Insufficient permissions</string>
+    <string name="error_server_banned">You are banned from this server</string>
     <string name="error_overlay_permission_required">Please grant the \'Display over other apps\' permission to use the floating window</string>
     <string name="overlay_permission_title">Overlay permission required</string>
     <string name="overlay_permission_message">The floating window shows your speaking status and quick controls when you switch to another app. You can connect anyway (the floating window stays off and can be re-enabled later in Settings), or grant the permission now.</string>

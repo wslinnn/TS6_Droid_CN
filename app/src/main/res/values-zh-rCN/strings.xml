@@ -195,6 +195,13 @@
     <string name="error_nickname_too_short">昵称至少需要3个字符</string>
     <string name="connection_failed">连接失败</string>
     <string name="browse_failed">浏览频道失败</string>
+    <string name="error_server_flooding">操作太频繁，请稍后再试</string>
+    <string name="error_server_already_in_channel">你已在该频道中</string>
+    <string name="error_server_channel_password">频道密码错误</string>
+    <string name="error_server_password">服务器密码错误</string>
+    <string name="error_server_full">服务器已满</string>
+    <string name="error_server_permission">权限不足</string>
+    <string name="error_server_banned">你已被该服务器封禁</string>
     <string name="error_overlay_permission_required">请授予「显示在其他应用上层」权限以使用悬浮窗</string>
     <string name="overlay_permission_title">需要悬浮窗权限</string>
     <string name="overlay_permission_message">悬浮窗用于在切换到其他应用时显示说话状态和快速面板。可以直接连接（悬浮窗保持关闭，稍后可在设置中重新开启），或去开启权限。</string>
