@@ -51,6 +51,9 @@ class TsClient {
 
         /** How often to re-request server variables (online counts, uptime). */
         private const val SERVER_VARIABLES_INTERVAL_MS = 5_000L
+
+        /** State refresh cadence when no events arrive to trigger it. */
+        private const val STATE_REFRESH_INTERVAL_MS = 500L
     }
 
     @Volatile
@@ -260,6 +263,18 @@ class TsClient {
     @Volatile private var pollServerVariables = false
 
     /**
+     * Capture activity. While the mic is open the event loop's native wait
+     * must stay shorter than one 20 ms audio frame: `sendAudio` runs on the
+     * same single native thread, so a 50 ms wait delivered audio in 2–3 frame
+     * bursts and starved the receiver's jitter buffer.
+     */
+    @Volatile private var captureActive = false
+
+    fun setCaptureActive(active: Boolean) {
+        captureActive = active
+    }
+
+    /**
      * Enable the periodic server-variables poll. Only the open server info
      * sheet turns this on — desktop clients likewise query only while the
      * connection info dialog is visible.
@@ -275,9 +290,9 @@ class TsClient {
         // 2. Launch a completely fresh lifecycle track
         eventLoopJob = clientCoroutineScope.launch {
             try {
-                var refreshCounter = 0
                 var lastEventAt = 0L
                 var lastServerVarsAt = 0L
+                var lastRefreshAt = 0L
                 while (isActive && client != null) {
                     ensureActive()
                     try {
@@ -285,7 +300,11 @@ class TsClient {
                         // Blocking wait in native code: event arrival wakes
                         // the call instantly (audio hot path), the timeout
                         // only bounds silence. No polling sleep here.
-                        val pollMs = if (System.currentTimeMillis() - lastEventAt < 2000) 15 else 50
+                        val pollMs = when {
+                            captureActive -> 5
+                            System.currentTimeMillis() - lastEventAt < 2000 -> 15
+                            else -> 50
+                        }
                         val waitStart = System.currentTimeMillis()
                         val events = c.waitEvents(pollMs) ?: emptyArray()
                         val waited = System.currentTimeMillis() - waitStart
@@ -301,16 +320,17 @@ class TsClient {
                             if (!emitted) Log.w(TAG, "Event buffer overflow, dropped ${event.type}")
                             handleEvent(event)
                         }
-                        refreshCounter++
-                        // Refresh on events or every ~500ms (25 * 20ms)
-                        if (events.isNotEmpty() || refreshCounter >= 25) {
+                        // Refresh on events, and otherwise at a fixed cadence:
+                        // the poll budget now varies with capture activity, so
+                        // a tick counter would drift with it.
+                        val now = System.currentTimeMillis()
+                        if (events.isNotEmpty() || now - lastRefreshAt >= STATE_REFRESH_INTERVAL_MS) {
+                            lastRefreshAt = now
                             refreshState()
-                            refreshCounter = 0
                         }
                         // The server only pushes counter/uptime updates when
                         // asked — poll while the info sheet is open so its
                         // values don't freeze at connect-time numbers
-                        val now = System.currentTimeMillis()
                         if (pollServerVariables && now - lastServerVarsAt >= SERVER_VARIABLES_INTERVAL_MS) {
                             lastServerVarsAt = now
                             try {

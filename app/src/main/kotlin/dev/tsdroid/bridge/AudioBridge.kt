@@ -399,6 +399,16 @@ class AudioBridge(
         }
     }
 
+    /**
+     * Keeps the service-visible capture flag and the native event-loop poll
+     * budget in sync: while capturing, the loop must not block long enough to
+     * queue audio frames behind it.
+     */
+    private fun setCapturing(active: Boolean) {
+        _isCapturing.value = active
+        tsClient.setCaptureActive(active)
+    }
+
     @SuppressLint("MissingPermission")
     fun startCapture(scope: CoroutineScope) {
         if (_isCapturing.value) return
@@ -411,7 +421,7 @@ class AudioBridge(
 
         val record = createAudioRecord() ?: return
         audioRecord = record
-        _isCapturing.value = true
+        setCapturing(true)
         captureScope = scope
         lastCaptureProgressAt = SystemClock.elapsedRealtime()
         requestAudioFocus()
@@ -420,12 +430,12 @@ class AudioBridge(
             val buffer = ShortArray(FRAME_SIZE_SAMPLES)
             val codec = encoder ?: run {
                 Log.e(TAG, "Cannot start capture: Opus encoder is not initialized")
-                _isCapturing.value = false
+                setCapturing(false)
                 return@launch
             }
             var record = audioRecord ?: run {
                 Log.e(TAG, "Cannot start capture: AudioRecord missing")
-                _isCapturing.value = false
+                setCapturing(false)
                 return@launch
             }
             // Self-heal bookkeeping. The capture device can die under our
@@ -479,7 +489,7 @@ class AudioBridge(
                 consecutiveRebuilds++
                 val fresh = createAudioRecord() ?: run {
                     Log.e(TAG, "Capture rebuild failed (attempt $consecutiveRebuilds); ending capture loop")
-                    _isCapturing.value = false
+                    setCapturing(false)
                     return null
                 }
                 synchronized(captureSwapLock) {
@@ -652,7 +662,7 @@ class AudioBridge(
                     _isLocalVoiceActive.value = false
                 }
             }
-            _isCapturing.value = false
+            setCapturing(false)
             _isLocalVoiceActive.value = false
             // Stop the reference feed before tearing the engine down; both
             // are synchronized, so a concurrent playback push can never touch
@@ -672,7 +682,7 @@ class AudioBridge(
     }
 
     fun stopCapture() {
-        _isCapturing.value = false
+        setCapturing(false)
         captureJob?.cancel()
         captureJob = null
         focusRetryJob?.cancel()
