@@ -184,6 +184,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
     private var lastConnectAddress: String? = null
     private var lastConnectNickname: String? = null
     private var lastConnectPassword: String? = null
+    private var lastConnectChannel: String? = null
 
     // Network-switch handling: a WiFi↔cellular switch kills the UDP session
     // but the client only notices after a timeout — reconnect immediately
@@ -578,7 +579,13 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
             (address == null || tsClient.serverAddress == address)
     }
 
-    suspend fun connect(address: String, identity: Identity, nickname: String, password: String?): Throwable? {
+    suspend fun connect(
+        address: String,
+        identity: Identity,
+        nickname: String,
+        password: String?,
+        channel: String? = null,
+    ): Throwable? {
         if (isStopping) {
             return IllegalStateException("Connection service is still stopping. Please try again.")
         }
@@ -587,8 +594,9 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         lastConnectAddress = address
         lastConnectNickname = nickname
         lastConnectPassword = password
+        lastConnectChannel = channel
         return try {
-            tsClient.connect(address, identity, nickname, password)
+            tsClient.connect(address, identity, nickname, password, channel)
             acquireVoiceLocks()
             audioBridge.startCapture(serviceScope)
             // Sync initial mute state with server
@@ -626,7 +634,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
             return e
         }
         return try {
-            connect(address, identity, nickname, lastConnectPassword)
+            connect(address, identity, nickname, lastConnectPassword, lastConnectChannel)
         } finally {
             identity.close()
         }

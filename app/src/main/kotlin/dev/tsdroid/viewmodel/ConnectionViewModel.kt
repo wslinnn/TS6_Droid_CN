@@ -221,10 +221,11 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 val identity = getOrCreateIdentity()
                 try {
                     val pw = password.value.trim().takeIf { it.isNotEmpty() }
-                    var connectionFailure = service.connect(addr, identity, nick, pw)
+                    val channelPath = channel.value.trim().takeIf { it.isNotEmpty() }
+                    var connectionFailure = service.connect(addr, identity, nick, pw, channelPath)
                     if (connectionFailure?.isTooManyClonesFailure() == true) {
                         Log.w(TAG, "Too many clones for saved identity; retrying with a temporary identity")
-                        connectionFailure = service.connect(addr, getCloneBypassIdentity(), nick, pw)
+                        connectionFailure = service.connect(addr, getCloneBypassIdentity(), nick, pw, channelPath)
                     }
 
                     if (connectionFailure == null) {
