@@ -45,7 +45,8 @@ object AnimeWallpaperState {
     var activeGeometry by mutableStateOf<WallpaperGeometry?>(null)
 
     val dominantColor = mutableStateOf<Color?>(null)
-    private var fetched = false
+    private var customBackgroundLoaded = false
+    private var onlineWallpaperFetched = false
     // No parent job to propagate to: an unexpected decode failure must be
     // logged, not crash the process via the default uncaught handler
     private val bgScope = CoroutineScope(
@@ -54,15 +55,32 @@ object AnimeWallpaperState {
         },
     )
 
-    suspend fun ensureFetched(context: Context) {
-        if (fetched) return
-        fetched = true
+    /**
+     * Loads the wallpaper this session should show.
+     *
+     * [animeEnabled] is the user's "anime background" setting. When it is off
+     * nothing is loaded and especially nothing is fetched: the app used to
+     * request `loliapi.com` on every cold start regardless of the setting,
+     * spending the user's traffic and leaking their IP to a third party for a
+     * feature they never turned on.
+     */
+    suspend fun ensureFetched(context: Context, animeEnabled: Boolean) {
         WallpaperCacheManager.init(context)
-        // Check existence synchronously: the decode below is async, so
-        // customBitmap may still be null on the next line
-        val hasCustom = CustomBackgroundManager.getActiveBackground(context) != null
-        refreshCustomBackground(context)
-        if (!hasCustom) {
+        if (!animeEnabled) return
+        if (!customBackgroundLoaded) {
+            customBackgroundLoaded = true
+            // Check existence synchronously: the decode below is async, so
+            // customBitmap may still be null on the next line
+            val hasCustom = CustomBackgroundManager.getActiveBackground(context) != null
+            refreshCustomBackground(context)
+            if (!hasCustom && !onlineWallpaperFetched) {
+                onlineWallpaperFetched = true
+                fetchOnlineWallpaper(context)
+            }
+        } else if (!onlineWallpaperFetched && CustomBackgroundManager.getActiveBackground(context) == null) {
+            // Setting enabled later in the session: fetch now instead of
+            // waiting for the next process start
+            onlineWallpaperFetched = true
             fetchOnlineWallpaper(context)
         }
     }
@@ -172,7 +190,7 @@ fun AnimeBackground(enabled: Boolean) {
     val context = LocalContext.current
 
     LaunchedEffect(Unit) {
-        AnimeWallpaperState.ensureFetched(context)
+        AnimeWallpaperState.ensureFetched(context, animeEnabled = true)
     }
 
     val customBmp = AnimeWallpaperState.customBitmap.value

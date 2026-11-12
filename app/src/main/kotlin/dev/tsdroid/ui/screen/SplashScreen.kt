@@ -13,17 +13,36 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.tsdroid.ui.component.AnimeWallpaperState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 
 @Composable
 fun SplashScreen(onReady: () -> Unit) {
     val context = LocalContext.current
     var showContent by remember { mutableStateOf(false) }
     var timedOut by remember { mutableStateOf(false) }
+    // null until the setting has been read
+    var wallpaperEnabled by remember { mutableStateOf<Boolean?>(null) }
     val url by AnimeWallpaperState.currentUrl
     val dominantColor by AnimeWallpaperState.dominantColor
 
     LaunchedEffect(Unit) {
-        AnimeWallpaperState.ensureFetched(context)
+        // The wallpaper is a third-party network fetch: only start it when the
+        // user enabled the feature, and then only wait for it when enabled —
+        // otherwise the splash would sit on its 3s timeout for nothing
+        val enabled = runCatching {
+            dev.tsdroid.data.SettingsStore(context).animeBackground.first()
+        }.getOrDefault(false)
+        wallpaperEnabled = enabled
+        AnimeWallpaperState.ensureFetched(context, animeEnabled = enabled)
+    }
+
+    LaunchedEffect(wallpaperEnabled) {
+        if (wallpaperEnabled == false) {
+            // No wallpaper to wait for: a brief brand flash is enough
+            delay(300)
+            showContent = true
+            timedOut = true
+        }
     }
 
     LaunchedEffect(url) {
