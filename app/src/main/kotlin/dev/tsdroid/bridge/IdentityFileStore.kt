@@ -106,12 +106,19 @@ class IdentityFileStore(private val context: Context) {
         val tmp = File(context.filesDir, "identity.import.tmp")
         return try {
             tmp.writeText(data, Charsets.UTF_8)
-            if (file.exists()) file.delete()
-            if (tmp.renameTo(file)) true else false
+            // renameTo replaces atomically on Android/Linux. Deleting first
+            // would open a window where the old identity is gone and the new
+            // one failed to rename — the user would have lost theirs.
+            if (tmp.renameTo(file)) {
+                true
+            } else {
+                // Keep tmp: the import can be retried without re-reading the
+                // source file, and the previous identity stays intact
+                android.util.Log.w("IdentityFileStore", "Identity rename failed; kept $tmp for retry")
+                false
+            }
         } catch (_: Exception) {
             false
-        } finally {
-            if (tmp.exists()) tmp.delete()
         }
     }
 }
