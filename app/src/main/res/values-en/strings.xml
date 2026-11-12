@@ -127,6 +127,7 @@
     <string name="close">Close</string>
     <string name="filter_all">All</string>
     <string name="message_channel_placeholder">Channel message\u2026</string>
+    <string name="chat_not_connected">Reconnecting — message not sent</string>
     <string name="message_private_placeholder">Message to %1$s\u2026</string>
     <string name="send">Send</string>
     <string name="user_fallback">User #%1$d</string>

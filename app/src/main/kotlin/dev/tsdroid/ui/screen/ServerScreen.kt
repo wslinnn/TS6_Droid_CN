@@ -640,15 +640,21 @@ fun ServerScreen(
                         onSelectPmUser = { key -> pmTargetKey = key },
                         onClearPmTarget = { pmTargetKey = null },
                         onSend = {
-                            if (WhisperManager.isWhisperActive && whisperFirstTargetName != null) {
+                            // Keep the draft when the message could not be
+                            // sent (reconnecting): the bubble is only added to
+                            // the local history on success
+                            val sent = if (WhisperManager.isWhisperActive && whisperFirstTargetName != null) {
                                 viewModel.sendWhisperMessage(messageText)
                             } else {
                                 when (chatTab) {
                                     0 -> viewModel.sendChannelMessage(messageText)
-                                    1 -> pmTargetKey?.let { viewModel.sendPrivateMessageToConversation(it, messageText) }
+                                    1 -> pmTargetKey?.let {
+                                        viewModel.sendPrivateMessageToConversation(it, messageText)
+                                    } ?: false
+                                    else -> false
                                 }
                             }
-                            messageText = ""
+                            if (sent) messageText = ""
                         },
                         onClose = { chatOpen = false },
                         unreadChannel = unreadChannel,
@@ -664,6 +670,10 @@ fun ServerScreen(
                         onDownload = { attachment -> viewModel.downloadAttachment(attachment) },
                         isWhisperActive = WhisperManager.isWhisperActive,
                         whisperTargetName = whisperFirstTargetName,
+                        // Commands are silently dropped by the native layer
+                        // while it reconnects; keep the draft instead of
+                        // recording a message nobody receives
+                        canSendNow = connectionState == ConnectionState.CONNECTED,
                     )
                 }
             }
@@ -850,6 +860,7 @@ fun ChatPanel(
     onDownload: ((FileAttachment) -> StateFlow<DownloadState>)? = null,
     isWhisperActive: Boolean = false,
     whisperTargetName: String? = null,
+    canSendNow: Boolean = true,
 ) {
     val context = LocalContext.current
     val uploadScope = rememberCoroutineScope()
@@ -1077,7 +1088,7 @@ fun ChatPanel(
                 )
                 IconButton(
                     onClick = onSend,
-                    enabled = messageText.isNotBlank() && (chatTab == 0 || pmTargetKey != null || (isWhisperActive && whisperTargetName != null)),
+                    enabled = canSendNow && messageText.isNotBlank() && (chatTab == 0 || pmTargetKey != null || (isWhisperActive && whisperTargetName != null)),
                 ) {
                     Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.send))
                 }

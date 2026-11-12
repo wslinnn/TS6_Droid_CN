@@ -833,14 +833,41 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun sendChannelMessage(text: String) {
-        if (text.isBlank()) return
+    /**
+     * True while chat commands can actually reach the server. During the
+     * native reconnect window `launchNativeCommand` silently drops commands
+     * (client == null), so appending the message locally would show a bubble
+     * nobody received and nothing would roll it back.
+     */
+    private fun canSendChat(): Boolean =
+        tsClient != null && _connectionState.value == ConnectionState.CONNECTED
+
+    private fun notifyChatNotConnected() {
+        viewModelScope.launch {
+            withContext(Dispatchers.Main) {
+                Toast.makeText(
+                    getApplication(),
+                    getApplication<Application>().getString(R.string.chat_not_connected),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
+    /** Returns false when the message was not sent (and not recorded). */
+    fun sendChannelMessage(text: String): Boolean {
+        if (text.isBlank()) return false
+        if (!canSendChat()) {
+            notifyChatNotConnected()
+            return false
+        }
         tsClient?.sendChannelMessage(text)
         _channelMessages.value = _channelMessages.value + ChatMessage(
             sender = getApplication<Application>().getString(R.string.me_sender), text = text, isMe = true,
         )
         pendingOwnEchoes.addLast(PendingEcho("channel", null, text, System.currentTimeMillis()))
         scheduleSave()
+        return true
     }
 
     fun sendPrivateMessage(userId: Int, text: String) {
@@ -852,8 +879,9 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
      * client id is resolved at send time — a uid-keyed conversation follows
      * the person across their own reconnects.
      */
-    fun sendPrivateMessageToConversation(convKey: String, text: String) {
-        if (text.isBlank()) return
+    /** Returns false when the message was not sent (and not recorded). */
+    fun sendPrivateMessageToConversation(convKey: String, text: String): Boolean {
+        if (text.isBlank()) return false
         val clid = resolveClid(convKey)
         if (clid == null) {
             viewModelScope.launch {
@@ -861,7 +889,11 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                     Toast.makeText(getApplication(), getApplication<Application>().getString(R.string.pm_target_offline), Toast.LENGTH_SHORT).show()
                 }
             }
-            return
+            return false
+        }
+        if (!canSendChat()) {
+            notifyChatNotConnected()
+            return false
         }
         tsClient?.sendPrivateMessage(clid, text)
         val msg = ChatMessage(
@@ -872,6 +904,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         _privateMessages.value = current
         pendingOwnEchoes.addLast(PendingEcho("private", convKey, text, System.currentTimeMillis()))
         scheduleSave()
+        return true
     }
 
     /**
@@ -921,8 +954,15 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     val myClientId: Int?
         get() = tsClient?.clientId
 
-    fun sendWhisperMessage(text: String) {
+    /** Returns false when the whisper text could not be sent right now. */
+    fun sendWhisperMessage(text: String): Boolean {
+        if (text.isBlank()) return false
+        if (!canSendChat()) {
+            notifyChatNotConnected()
+            return false
+        }
         WhisperManager.sendWhisperMessage(text)
+        return true
     }
 
     val whisperCandidateUsers: List<User>
