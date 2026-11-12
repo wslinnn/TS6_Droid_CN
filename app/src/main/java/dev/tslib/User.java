@@ -1,5 +1,8 @@
 package dev.tslib;
 
+import java.util.Arrays;
+import java.util.Objects;
+
 /**
  * A TeamSpeak user (immutable snapshot).
  */
@@ -82,6 +85,58 @@ public class User {
      */
     public boolean isQuery() {
         return clientType == 1;
+    }
+
+    /**
+     * Value semantics: the native snapshot bridge rebuilds a fresh User array
+     * on every refresh (500ms, plus once per event). Without equals/hashCode
+     * every assignment to the StateFlow looks like a change, so the whole
+     * server screen recomposes at that cadence.
+     */
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof User)) return false;
+        User other = (User) o;
+        return id == other.id
+            && databaseId == other.databaseId
+            && channelId == other.channelId
+            && clientType == other.clientType
+            && isTalking == other.isTalking
+            && isInputMuted == other.isInputMuted
+            && isOutputMuted == other.isOutputMuted
+            && hasInputHardware == other.hasInputHardware
+            && hasOutputHardware == other.hasOutputHardware
+            && isAway == other.isAway
+            && isRecording == other.isRecording
+            && isPrioritySpeaker == other.isPrioritySpeaker
+            && isChannelCommander == other.isChannelCommander
+            && isTalker == other.isTalker
+            && talkPower == other.talkPower
+            && channelGroup == other.channelGroup
+            && iconId == other.iconId
+            && Objects.equals(uid, other.uid)
+            && Objects.equals(nickname, other.nickname)
+            && Objects.equals(awayMessage, other.awayMessage)
+            && Arrays.equals(serverGroups, other.serverGroups)
+            && Objects.equals(platform, other.platform)
+            && Objects.equals(version, other.version)
+            && Objects.equals(country, other.country)
+            && Objects.equals(description, other.description)
+            && Objects.equals(avatarId, other.avatarId)
+            && Objects.equals(createdAt, other.createdAt)
+            && Objects.equals(lastConnectedAt, other.lastConnectedAt);
+    }
+
+    @Override
+    public int hashCode() {
+        return 31 * Objects.hash(id, uid, databaseId, channelId, nickname,
+            clientType, isTalking, isInputMuted, isOutputMuted, hasInputHardware,
+            hasOutputHardware, isAway, isRecording, isPrioritySpeaker,
+            isChannelCommander, isTalker, talkPower, awayMessage, channelGroup,
+            platform, version, country, description, avatarId, iconId, createdAt,
+            lastConnectedAt)
+            + Arrays.hashCode(serverGroups);
     }
 
     @Override

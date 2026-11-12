@@ -1,5 +1,7 @@
 package dev.tslib;
 
+import java.util.Objects;
+
 /**
  * A TeamSpeak channel (immutable snapshot).
  */
@@ -89,6 +91,44 @@ public class Channel {
 
     public boolean canCreateDirectory() {
         return permissionHintsKnown && (permissionHints & PERM_FILE_DIRECTORY_CREATE) != 0;
+    }
+
+    /**
+     * Value semantics: the native snapshot bridge rebuilds a fresh Channel
+     * array on every refresh, so without equals/hashCode every StateFlow
+     * assignment "changes" and the UI recomposes at the refresh cadence.
+     */
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Channel)) return false;
+        Channel other = (Channel) o;
+        return id == other.id
+            && parentId == other.parentId
+            && order == other.order
+            && isPermanent == other.isPermanent
+            && isSemiPermanent == other.isSemiPermanent
+            && isDefault == other.isDefault
+            && hasPassword == other.hasPassword
+            && codec == other.codec
+            && codecQuality == other.codecQuality
+            && maxClients == other.maxClients
+            && maxFamilyClients == other.maxFamilyClients
+            && neededTalkPower == other.neededTalkPower
+            && iconId == other.iconId
+            && permissionHints == other.permissionHints
+            && permissionHintsKnown == other.permissionHintsKnown
+            && Objects.equals(name, other.name)
+            && Objects.equals(topic, other.topic)
+            && Objects.equals(description, other.description);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(id, parentId, name, topic, description, order,
+            isPermanent, isSemiPermanent, isDefault, hasPassword, codec,
+            codecQuality, maxClients, maxFamilyClients, neededTalkPower, iconId,
+            permissionHints, permissionHintsKnown);
     }
 
     @Override

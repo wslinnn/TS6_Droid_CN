@@ -458,8 +458,13 @@ class TsClient {
             _channels.value = c.channels?.filterNotNull() ?: emptyList()
             val rawUsers = c.users
             val filteredUsers = rawUsers?.filterNotNull() ?: emptyList()
-            Log.d(TAG, "refreshState: rawUsers=${rawUsers?.size}, filtered=${filteredUsers.size}")
-            if (filteredUsers.isNotEmpty()) {
+            val previous = _users.value
+            // The per-user dump is for troubleshooting joins/leaves; printing
+            // it on every refresh (2Hz + once per event) drowned the audio
+            // summary lines in the 2000-line log ring, so it only prints when
+            // the roster itself changes — talk status ticks don't qualify
+            if (rosterOf(filteredUsers) != rosterOf(previous)) {
+                Log.d(TAG, "refreshState: roster changed (${filteredUsers.size} users)")
                 for (u in filteredUsers) {
                     Log.d(TAG, "  user: ${u.nickname} id=${u.id} ch=${u.channelId}")
                 }
@@ -474,6 +479,10 @@ class TsClient {
             closeAfterNativeFailure()
         }
     }
+
+    /** Roster identity (who is where) — deliberately excludes volatile state. */
+    private fun rosterOf(users: List<User>): List<String> =
+        users.map { "${it.id}:${it.nickname}:${it.channelId}" }
 
     private fun closeAfterNativeFailure() {
         val c = client
