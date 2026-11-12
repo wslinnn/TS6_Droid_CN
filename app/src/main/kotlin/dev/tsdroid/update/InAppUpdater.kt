@@ -30,10 +30,20 @@ object InAppUpdater {
         }
     }
 
+    /**
+     * Downloads the release APK and hands it to the system installer.
+     *
+     * @param expectedSize size advertised by the release API (0 = unknown).
+     *   The download is rejected when the received byte count differs: the
+     *   system installer verifies the signature, but a truncated file or an
+     *   injected/replaced one with a matching length prefix would otherwise be
+     *   installed blindly.
+     */
     suspend fun downloadAndInstall(
         context: Context,
         downloadUrl: String,
         fileName: String = "update.apk",
+        expectedSize: Long = 0L,
         onProgress: (DownloadProgress) -> Unit = {},
     ): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -41,6 +51,9 @@ object InAppUpdater {
 
             val cacheDir = File(context.cacheDir, "updates").also { it.mkdirs() }
             val apkFile = File(cacheDir, fileName)
+            // Never reuse a previous attempt's leftovers (partial file from a
+            // failed download used to stay there and confuse later runs)
+            if (apkFile.exists()) apkFile.delete()
 
             val url = URL(downloadUrl)
             val conn = url.openConnection() as HttpURLConnection
@@ -70,6 +83,19 @@ object InAppUpdater {
             }
             conn.disconnect()
 
+            // A 200 with a short body (or a proxy-injected truncation) is not
+            // detectable by the installer — compare against both sizes
+            if (totalSize > 0 && downloaded != totalSize) {
+                throw IllegalStateException(
+                    "Update download truncated: $downloaded/$totalSize bytes",
+                )
+            }
+            if (expectedSize > 0 && downloaded != expectedSize) {
+                throw IllegalStateException(
+                    "Update size mismatch: got $downloaded bytes, release advertises $expectedSize",
+                )
+            }
+
             onProgress(DownloadProgress(DownloadState.DOWNLOADING, 1f))
 
             installApk(context, apkFile)
@@ -78,6 +104,8 @@ object InAppUpdater {
             true
         } catch (e: Exception) {
             Log.e(TAG, "Download/install failed", e)
+            // Never leave a partial/foreign APK behind for the next attempt
+            runCatching { File(File(context.cacheDir, "updates"), fileName).delete() }
             onProgress(DownloadProgress(DownloadState.FAILED, error = e.message ?: "下载失败"))
             false
         }

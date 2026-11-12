@@ -916,6 +916,7 @@ private fun UpdateCheckRow(context: Context) {
                             dev.tsdroid.update.InAppUpdater.downloadAndInstall(
                                 context = context,
                                 downloadUrl = updateInfo!!.downloadUrl,
+                                expectedSize = updateInfo!!.apkSize,
                                 onProgress = { progress ->
                                     downloadProgress = progress.progress
                                     if (progress.state == dev.tsdroid.update.InAppUpdater.DownloadState.FAILED) {
