@@ -966,13 +966,28 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     /** Mute state to restore when a PTT press ends (overlay unmutes survive). */
     private var prePttMicMuted = true
 
+    /** True while a PTT press has the mic open; see [setPushToTalk]. */
+    private var pttHeld = false
+
+    /**
+     * Push-to-talk press/release. Both calls are idempotent so every teardown
+     * path can safely re-assert "released": the gesture's own `finally`, the
+     * screen's DisposableEffect, and a duplicate release all converge on the
+     * same state, and a release without an outstanding press never overwrites
+     * the real mute state (it would otherwise re-mute a user who never used
+     * PTT).
+     */
     fun setPushToTalk(pressed: Boolean) {
         val bridge = audioBridge ?: return
         if (pressed) {
+            if (pttHeld) return
             // PTT only overrides the mute while held
             prePttMicMuted = bridge.isMuted.value
+            pttHeld = true
             bridge.setMuted(false)
         } else {
+            if (!pttHeld) return
+            pttHeld = false
             bridge.setMuted(prePttMicMuted)
         }
     }

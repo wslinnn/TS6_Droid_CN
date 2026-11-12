@@ -171,6 +171,14 @@ fun ServerScreen(
     var messageText by remember { mutableStateOf("") }
     var pmTargetKey by remember { mutableStateOf<String?>(null) }
 
+    // Privacy guard: a PTT press opens the mic, and capture keeps running in
+    // the service after this screen goes away (rotation, back navigation,
+    // process-driven recreation). Release on every exit path; the call is a
+    // no-op unless a press is actually outstanding.
+    DisposableEffect(Unit) {
+        onDispose { viewModel.setPushToTalk(false) }
+    }
+
     // Password-protected channel the user tapped; non-null shows the dialog
     var passwordChannelId by remember { mutableStateOf<Long?>(null) }
 
@@ -413,8 +421,18 @@ fun ServerScreen(
                                 detectTapGestures(
                                     onPress = {
                                         viewModel.setPushToTalk(true)
-                                        tryAwaitRelease()
-                                        viewModel.setPushToTalk(false)
+                                        try {
+                                            tryAwaitRelease()
+                                        } finally {
+                                            // Cancelled gestures (rotation,
+                                            // resize, recomposition teardown)
+                                            // throw out of tryAwaitRelease.
+                                            // Capture and send run in the
+                                            // service, so a missed release
+                                            // leaves the mic hot until the
+                                            // next press — restore it here.
+                                            viewModel.setPushToTalk(false)
+                                        }
                                     },
                                 )
                             }
