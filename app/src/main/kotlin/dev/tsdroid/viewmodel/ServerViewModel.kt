@@ -1226,34 +1226,65 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         viewModelScope.launch {
-            val path = "/$fileName"
-            val success = client.uploadFile(channelId, path, data, overwrite = true)
+            // Sharing into the channel root must not silently overwrite a
+            // different file that happens to share the name: that is
+            // irreversible for everyone else in the channel. Probe the
+            // directory, pick a free name, and upload without overwrite as
+            // the final guard (a failed probe keeps the plain name, and the
+            // server then rejects the duplicate instead of clobbering it).
+            val uploadedName = uniqueUploadName(client, channelId, "/", fileName)
+            val path = "/$uploadedName"
+            val success = client.uploadFile(channelId, path, data, overwrite = false)
             if (success) {
                 val addr = serverAddress ?: "localhost"
                 val host = addr.substringBefore(':')
                 val port = addr.substringAfter(':', "9987")
                 val fileDateTime = System.currentTimeMillis() / 1000
-                val ts3Url = Ts3FileLink.build(host, port, channelId, "/", fileName, data.size.toLong(), fileDateTime)
+                val ts3Url = Ts3FileLink.build(host, port, channelId, "/", uploadedName, data.size.toLong(), fileDateTime)
 
-                val ext = fileName.substringAfterLast('.', "").lowercase()
+                val ext = uploadedName.substringAfterLast('.', "").lowercase()
                 val isImage = ext in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
-                val attachment = FileAttachment(fileName, data.size.toLong(), fileId = "", isImage, channelId = channelId)
+                val attachment = FileAttachment(uploadedName, data.size.toLong(), fileId = "", isImage, channelId = channelId)
                 val meSender = getApplication<Application>().getString(R.string.me_sender)
 
                 if (isPrivate && targetClid != null && targetKey != null) {
                     tsClient?.sendPrivateMessage(targetClid, ts3Url)
-                    val msg = ChatMessage(sender = meSender, text = fileName, isMe = true, isPrivate = true, senderId = targetClid, fileAttachment = attachment)
+                    val msg = ChatMessage(sender = meSender, text = uploadedName, isMe = true, isPrivate = true, senderId = targetClid, fileAttachment = attachment)
                     val current = _privateMessages.value.toMutableMap()
                     current[targetKey] = (current[targetKey] ?: emptyList()) + msg
                     _privateMessages.value = current
                 } else {
                     tsClient?.sendChannelMessage(ts3Url)
-                    val msg = ChatMessage(sender = meSender, text = fileName, isMe = true, fileAttachment = attachment)
+                    val msg = ChatMessage(sender = meSender, text = uploadedName, isMe = true, fileAttachment = attachment)
                     _channelMessages.value = _channelMessages.value + msg
                 }
                 scheduleSave()
             }
         }
+    }
+
+    /**
+     * A file name that does not exist yet in [dir] of [channelId], adding a
+     * " (2)", " (3)"… suffix before the extension. Returns [fileName]
+     * unchanged when the directory cannot be listed (the caller then uploads
+     * without overwrite, so a collision fails instead of destroying data).
+     */
+    private suspend fun uniqueUploadName(
+        client: TsClient,
+        channelId: Long,
+        dir: String,
+        fileName: String,
+    ): String {
+        val existing = client.listFiles(channelId, dir)?.map { it.name }?.toSet() ?: return fileName
+        if (fileName !in existing) return fileName
+        val dot = fileName.lastIndexOf('.')
+        val base = if (dot > 0) fileName.substring(0, dot) else fileName
+        val ext = if (dot > 0) fileName.substring(dot) else ""
+        for (i in 2..999) {
+            val candidate = "$base ($i)$ext"
+            if (candidate !in existing) return candidate
+        }
+        return "$base-${System.currentTimeMillis()}$ext"
     }
 
     fun downloadAttachment(attachment: FileAttachment): StateFlow<DownloadState> {
