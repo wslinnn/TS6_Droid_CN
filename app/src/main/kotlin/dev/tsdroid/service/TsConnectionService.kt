@@ -186,6 +186,17 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
     private var lastConnectPassword: String? = null
     private var lastConnectChannel: String? = null
 
+    /**
+     * Identity this session must present on every reconnect, or null to
+     * reload the persisted one from disk.
+     *
+     * Set for clone-bypass sessions: the server rejected the persisted
+     * identity as a clone, so reconnect() has to keep using the ad-hoc one it
+     * actually accepted. Owned by the service — released when the session
+     * ends, whenever a new non-retained connect starts, and on destroy.
+     */
+    private var sessionIdentity: Identity? = null
+
     // Network-switch handling: a WiFi↔cellular switch kills the UDP session
     // but the client only notices after a timeout — reconnect immediately
     @Volatile private var isReconnectingForNetworkSwitch = false
@@ -579,13 +590,27 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
             (address == null || tsClient.serverAddress == address)
     }
 
+    /**
+     * Connect with [identity].
+     *
+     * @param retainIdentity hand [identity] over to the service so reconnect()
+     *   keeps presenting it for the rest of the session. Used by the
+     *   clone-bypass retry, where the persisted identity is the one the server
+     *   rejected. The service owns (and eventually closes) it from that point.
+     */
     suspend fun connect(
         address: String,
         identity: Identity,
         nickname: String,
         password: String?,
         channel: String? = null,
+        retainIdentity: Boolean = false,
     ): Throwable? {
+        if (retainIdentity) {
+            adoptSessionIdentity(identity)
+        } else {
+            releaseSessionIdentity()
+        }
         if (isStopping) {
             return IllegalStateException("Connection service is still stopping. Please try again.")
         }
@@ -621,22 +646,57 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
     }
 
     /**
-     * Reconnect using the parameters of the last connect() call, reloading
-     * the persisted identity from disk. Returns null on success.
+     * Reconnect using the parameters of the last connect() call. Presents the
+     * session identity when one was retained (clone-bypass), otherwise
+     * reloads the persisted identity from disk. Returns null on success.
      */
     suspend fun reconnect(): Throwable? {
         val address = lastConnectAddress ?: return null
         val nickname = lastConnectNickname ?: return null
-        val identityFile = File(applicationContext.filesDir, "identity.ini")
-        val identity = try {
-            Identity.load(identityFile.absolutePath)
+        // A clone-bypass session must present the identity the server
+        // accepted: reloading the disk identity here is exactly the one it
+        // rejected as a clone, so every attempt would fail
+        val retained = sessionIdentity
+        val identity = retained ?: try {
+            Identity.load(File(applicationContext.filesDir, "identity.ini").absolutePath)
         } catch (e: Throwable) {
             return e
         }
         return try {
-            connect(address, identity, nickname, lastConnectPassword, lastConnectChannel)
+            connect(
+                address,
+                identity,
+                nickname,
+                lastConnectPassword,
+                lastConnectChannel,
+                retainIdentity = retained != null,
+            )
         } finally {
-            identity.close()
+            // A retained identity outlives this call; a freshly loaded one
+            // was only needed to build the native client
+            if (retained == null) identity.close()
+        }
+    }
+
+    private fun adoptSessionIdentity(identity: Identity) {
+        if (sessionIdentity === identity) return
+        releaseSessionIdentity()
+        sessionIdentity = identity
+        Log.i(TAG, "Session identity retained for reconnect (clone-bypass)")
+    }
+
+    private fun releaseSessionIdentity() {
+        val previous = sessionIdentity ?: return
+        sessionIdentity = null
+        // Close behind any queued native work: a reconnect may be building a
+        // Client from this identity right now, and closing it concurrently
+        // would free the key under that call
+        tsClient.runOnNativeThread {
+            try {
+                previous.close()
+            } catch (e: Throwable) {
+                Log.w(TAG, "Closing session identity failed", e)
+            }
         }
     }
 
@@ -665,6 +725,8 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         hideFloatingWindow()
         audioBridge.stopCapture()
         WhisperManager.reset()
+        // Session over: the bypass identity (if any) must not outlive it
+        releaseSessionIdentity()
     }
 
     private fun cleanupFailedConnection() {
@@ -931,6 +993,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         }
         audioBridge.release()
         serviceScope.cancel()
+        releaseSessionIdentity()
         super.onDestroy()
     }
 

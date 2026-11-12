@@ -585,6 +585,16 @@ class TsClient {
         }
     }
 
+    /**
+     * Runs [block] on the serialized native thread, behind whatever native
+     * work is already queued. Used to release native resources a pending call
+     * may still be reading — e.g. closing an [Identity] while a reconnect is
+     * building its Client from it would be a use-after-free.
+     */
+    fun runOnNativeThread(block: () -> Unit) {
+        clientCoroutineScope.launch { block() }
+    }
+
     // Audio sink requested before a native client exists (or across
     // reconnects): re-attached to every freshly created native client
     private var pendingAudioSink: dev.tslib.AudioSink? = null

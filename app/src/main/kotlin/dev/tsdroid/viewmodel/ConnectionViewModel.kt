@@ -134,7 +134,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private var serviceConnection: ServiceConnection? = null
     private var connectJob: kotlinx.coroutines.Job? = null
-    private var cloneBypassIdentity: Identity? = null
 
     private data class ConnectionInput(
         val address: String,
@@ -225,7 +224,13 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     var connectionFailure = service.connect(addr, identity, nick, pw, channelPath)
                     if (connectionFailure?.isTooManyClonesFailure() == true) {
                         Log.w(TAG, "Too many clones for saved identity; retrying with a temporary identity")
-                        connectionFailure = service.connect(addr, getCloneBypassIdentity(), nick, pw, channelPath)
+                        // retainIdentity: the service keeps this identity for
+                        // reconnect(), which otherwise reloads the persisted
+                        // one the server just rejected as a clone. Ownership
+                        // is transferred, so it must not be closed here.
+                        connectionFailure = service.connect(
+                            addr, Identity(), nick, pw, channelPath, retainIdentity = true,
+                        )
                     }
 
                     if (connectionFailure == null) {
@@ -237,9 +242,9 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                             .ifEmpty { getApplication<Application>().getString(R.string.connection_failed) }
                     }
                 } finally {
-                    // reconnect() reloads the identity from disk, so this
-                    // native instance isn't needed once the connect attempts
-                    // are done
+                    // reconnect() reloads the identity from disk (or reuses the
+                    // service-retained clone-bypass one), so this native
+                    // instance isn't needed once the connect attempts are done
                     identity.close()
                 }
             } catch (e: CancellationException) {
@@ -558,12 +563,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    private fun getCloneBypassIdentity(): Identity {
-        return cloneBypassIdentity ?: Identity().also {
-            cloneBypassIdentity = it
-        }
-    }
-
     private fun Throwable.isTooManyClonesFailure(): Boolean {
         var current: Throwable? = this
         while (current != null) {
@@ -600,8 +599,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 getApplication<Application>().unbindService(it)
             } catch (_: Exception) {}
         }
-        cloneBypassIdentity?.close()
-        cloneBypassIdentity = null
         super.onCleared()
     }
 }
