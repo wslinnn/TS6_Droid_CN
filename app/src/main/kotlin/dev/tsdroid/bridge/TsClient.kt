@@ -18,7 +18,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -29,7 +28,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 data class TsFileEntry(
@@ -106,14 +104,12 @@ class TsClient {
      */
     data class CommandError(val code: Int?, val message: String)
 
-    private val downloadCallbacks = ConcurrentHashMap<String, CompletableDeferred<ByteArray>>()
-    private val uploadCallbacks = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
-    // path → channelId of the in-flight request; completion events carry only
-    // the path, so the channel is resolved from here (prevents files with the
-    // same name in different channels from mixing up callbacks)
-    private val downloadKeys = ConcurrentHashMap<String, Long>()
-    private val uploadKeys = ConcurrentHashMap<String, Long>()
-    private val fileListCallbacks = ConcurrentHashMap<String, CompletableDeferred<List<TsFileEntry>>>()
+    // Concurrent callers may await the same (channel, path) transfer — the
+    // chat bubble and its preview, or two channels holding the same file
+    // name. See TransferWaiters for why a single deferred per key is wrong.
+    private val downloadWaiters = TransferWaiters<ByteArray>()
+    private val uploadWaiters = TransferWaiters<Boolean>()
+    private val fileListWaiters = TransferWaiters<List<TsFileEntry>>()
 
     private var eventLoopJob: Job? = null
     private val clientCoroutineScope = CoroutineScope(nativeDispatcher + SupervisorJob())
@@ -401,26 +397,36 @@ class TsClient {
             "file_downloaded" -> {
                 val path = event.data["path"] as? String ?: return
                 val data = event.data["data"] as? ByteArray ?: return
-                val channelId = downloadKeys.remove(path) ?: 0L
-                Log.d(TAG, "File downloaded: ch=$channelId path=$path (${data.size} bytes)")
-                downloadCallbacks.remove("$channelId:$path")?.complete(data)
+                // tslib-jni ≥ 0.1.4 puts the channel in the event; the
+                // fallback covers an older .so that only sent the path
+                val channelId = (event.data["channel_id"] as? Number)?.toLong()
+                val delivered = if (channelId != null) {
+                    downloadWaiters.complete(channelId, path, data)
+                } else {
+                    downloadWaiters.completeAll(path, data)
+                }
+                Log.d(TAG, "File downloaded: ch=${channelId ?: "?"} path=$path (${data.size} bytes, delivered=$delivered)")
             }
             "file_uploaded" -> {
                 val path = event.data["path"] as? String ?: return
-                val channelId = uploadKeys.remove(path) ?: 0L
-                Log.d(TAG, "File uploaded: ch=$channelId path=$path")
-                uploadCallbacks.remove("$channelId:$path")?.complete(true)
+                val channelId = (event.data["channel_id"] as? Number)?.toLong()
+                val delivered = if (channelId != null) {
+                    uploadWaiters.complete(channelId, path, true)
+                } else {
+                    uploadWaiters.completeAll(path, true)
+                }
+                Log.d(TAG, "File uploaded: ch=${channelId ?: "?"} path=$path delivered=$delivered")
             }
             "file_transfer_failed" -> {
                 val path = event.data["path"] as? String ?: return
                 val error = event.data["error"] as? String ?: "unknown"
                 Log.w(TAG, "File transfer failed: $path — $error")
-                val dlChannel = downloadKeys.remove(path) ?: 0L
-                downloadCallbacks.remove("$dlChannel:$path")?.completeExceptionally(
-                    Exception("File transfer failed: $error")
-                )
-                val upChannel = uploadKeys.remove(path) ?: 0L
-                uploadCallbacks.remove("$upChannel:$path")?.complete(false)
+                // This event carries no channel id: a failure is terminal for
+                // every channel waiting on the same path, and failing them
+                // beats letting each one burn its full timeout
+                val failure = Exception("File transfer failed: $error")
+                downloadWaiters.failAll(path, failure)
+                uploadWaiters.failAll(path, failure)
             }
             "file_list_received" -> {
                 val channelId = (event.data["channel_id"] as? Number)?.toLong() ?: return
@@ -428,7 +434,7 @@ class TsClient {
                 val filesJson = event.data["files"] as? String ?: return
                 val entries = parseFileEntries(filesJson)
                 Log.d(TAG, "File list received: channel=$channelId path=$path entries=${entries.size}")
-                fileListCallbacks.remove("$channelId:$path")?.complete(entries)
+                fileListWaiters.complete(channelId, path, entries)
             }
             "command_error" -> {
                 val message = event.data["message"] as? String ?: return
@@ -496,6 +502,12 @@ class TsClient {
         _users.value = emptyList()
         _serverInfo.value = null
         cachedClientId = null
+        // Nothing will answer these anymore: fail them now instead of letting
+        // callers sit out their 10s/30s timeouts
+        val gone = IllegalStateException("Disconnected")
+        downloadWaiters.reset(gone)
+        uploadWaiters.reset(gone)
+        fileListWaiters.reset(gone)
     }
 
     private fun closeClient(c: Client, reason: String) {
@@ -658,10 +670,7 @@ class TsClient {
     }
 
     suspend fun downloadFile(channelId: Long, path: String): ByteArray? {
-        val deferred = CompletableDeferred<ByteArray>()
-        val key = "$channelId:$path"
-        downloadKeys[path] = channelId
-        downloadCallbacks[key] = deferred
+        val waiter = downloadWaiters.register(channelId, path)
         val started = withContext(nativeDispatcher) {
             try {
                 val c = client ?: return@withContext false
@@ -674,27 +683,23 @@ class TsClient {
             }
         }
         if (!started) {
-            downloadCallbacks.remove(key)
-            downloadKeys.remove(path)
+            downloadWaiters.remove(channelId, path, waiter)
             return null
         }
-        return withTimeoutOrNull(10_000) {
-            try {
-                deferred.await()
-            } catch (e: Exception) {
-                Log.w(TAG, "downloadFile await failed for $path", e)
-                null
-            }
-        }.also {
-            downloadCallbacks.remove(key)
-            downloadKeys.remove(path)
+        return try {
+            withTimeoutOrNull(10_000) { waiter.await() }
+        } catch (e: Exception) {
+            Log.w(TAG, "downloadFile await failed for $path", e)
+            null
+        } finally {
+            // Removes only this caller: a sibling waiter for the same
+            // (channel, path) must survive our timeout
+            downloadWaiters.remove(channelId, path, waiter)
         }
     }
 
     suspend fun listFiles(channelId: Long, path: String): List<TsFileEntry>? {
-        val key = "$channelId:$path"
-        val deferred = CompletableDeferred<List<TsFileEntry>>()
-        fileListCallbacks[key] = deferred
+        val waiter = fileListWaiters.register(channelId, path)
         val started = withContext(nativeDispatcher) {
             try {
                 val c = client ?: return@withContext false
@@ -707,15 +712,17 @@ class TsClient {
             }
         }
         if (!started) {
-            fileListCallbacks.remove(key)
+            fileListWaiters.remove(channelId, path, waiter)
             return null
         }
-        return withTimeoutOrNull(5_000) {
-            try { deferred.await() } catch (e: Exception) {
-                Log.w(TAG, "listFiles await failed for $path", e)
-                null
-            }
-        }.also { fileListCallbacks.remove(key) }
+        return try {
+            withTimeoutOrNull(5_000) { waiter.await() }
+        } catch (e: Exception) {
+            Log.w(TAG, "listFiles await failed for $path", e)
+            null
+        } finally {
+            fileListWaiters.remove(channelId, path, waiter)
+        }
     }
 
     fun deleteFile(channelId: Long, name: String) {
@@ -761,10 +768,7 @@ class TsClient {
     }
 
     suspend fun uploadFile(channelId: Long, path: String, data: ByteArray, overwrite: Boolean = true): Boolean {
-        val deferred = CompletableDeferred<Boolean>()
-        val key = "$channelId:$path"
-        uploadKeys[path] = channelId
-        uploadCallbacks[key] = deferred
+        val waiter = uploadWaiters.register(channelId, path)
         val started = withContext(nativeDispatcher) {
             try {
                 val c = client ?: return@withContext false
@@ -777,20 +781,18 @@ class TsClient {
             }
         }
         if (!started) {
-            uploadCallbacks.remove(key)
-            uploadKeys.remove(path)
+            uploadWaiters.remove(channelId, path, waiter)
             return false
         }
-        return withTimeoutOrNull(30_000) {
-            try {
-                deferred.await()
-            } catch (e: Exception) {
-                Log.w(TAG, "uploadFile await failed for $path", e)
-                false
-            }
-        }.also {
-            uploadCallbacks.remove(key)
-            uploadKeys.remove(path)
+        return try {
+            // 30s upload budget: a fast rejection is delivered as an event,
+            // but a timeout is this caller's own business
+            withTimeoutOrNull(30_000) { waiter.await() }
+        } catch (e: Exception) {
+            Log.w(TAG, "uploadFile await failed for $path", e)
+            false
+        } finally {
+            uploadWaiters.remove(channelId, path, waiter)
         } ?: false
     }
 
