@@ -23,6 +23,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -98,6 +99,9 @@ class AudioBridge(
         /** Receive/encode diagnostics aggregation period. */
         private const val DIAG_FLUSH_MS = 30_000L
 
+        /** Backoff before the restart wrapper relaunches the playback loop. */
+        private const val PLAYBACK_RESTART_DELAY_MS = 500L
+
         /** Output volume multiplier while another app holds transient focus (can-duck). */
         private const val DUCK_FACTOR = 0.3f
 
@@ -124,6 +128,13 @@ class AudioBridge(
     // Per-user decoders and raw opus queues for playback mixing
     private val userDecoders = ConcurrentHashMap<Int, OpusCodec>()
     private val userQueues = ConcurrentHashMap<Int, FrameQueue>()
+
+    /**
+     * Users whose decoder could not be created this session (Opus handle
+     * exhaustion, OOM). One speaker's failure must not take everyone's audio
+     * down with it, so the playback loop skips them instead of throwing.
+     */
+    private val failedDecoders = ConcurrentHashMap.newKeySet<Int>()
 
     // Receive-concealment bookkeeping, keyed by user
     private val userLastAudioAt = ConcurrentHashMap<Int, Long>()
@@ -292,10 +303,16 @@ class AudioBridge(
      */
     private val captureGeneration = java.util.concurrent.atomic.AtomicInteger(0)
 
-    // Dedicated single-thread scope for audio playback
+    // Dedicated single-thread scope for audio playback. The exception handler
+    // is the last line of defence: the restart wrapper catches everything the
+    // loop throws, but an unexpected failure of the wrapper itself must be
+    // logged rather than reaching the process' default uncaught handler.
     @OptIn(ExperimentalCoroutinesApi::class)
     private val playbackScope = CoroutineScope(
-        SupervisorJob() + Dispatchers.IO.limitedParallelism(1)
+        SupervisorJob() + Dispatchers.IO.limitedParallelism(1) +
+            kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
+                Log.e(TAG, "Playback scope failed", e)
+            }
     )
 
     // Coalescing wake signal for the playback loop: capacity 1 — producers
@@ -362,6 +379,8 @@ class AudioBridge(
         userDiag.keys.retainAll(activeIds)
         userLastAudioAt.keys.retainAll(activeIds)
         userHungerStreak.keys.retainAll(activeIds)
+        // A recycled client id gets a fresh chance at a decoder
+        failedDecoders.retainAll(activeIds)
     }
 
     private val _isMuted = MutableStateFlow(true) // Start muted (PTT default)
@@ -996,6 +1015,33 @@ class AudioBridge(
     }
 
     /**
+     * Starts the (self-restarting) playback loop. Runs once, at init.
+     */
+    private fun startPlaybackLoop() {
+        playbackJob = playbackScope.launch { supervisePlayback() }
+    }
+
+    /**
+     * Restart wrapper around the playback loop: a throw that escapes the
+     * per-frame guards would otherwise end playback for the whole session
+     * (startPlaybackLoop runs once, at init). One failing frame must not
+     * silence everyone until the next connection.
+     */
+    private suspend fun supervisePlayback() {
+        while (currentCoroutineContext().isActive) {
+            try {
+                runPlaybackLoop()
+                return
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.e(TAG, "Playback loop crashed; restarting", t)
+                delay(PLAYBACK_RESTART_DELAY_MS)
+            }
+        }
+    }
+
+    /**
      * Playback loop: decodes one opus frame per user, conceals detected
      * loss, mixes PCM, writes one combined frame to AudioTrack. All decoder
      * access is on this single thread so no synchronization is needed on
@@ -1007,184 +1053,199 @@ class AudioBridge(
      * is skipped. When a talkspurt tail starves, up to
      * [MAX_HUNGER_PLC_FRAMES] PLC frames extend it before going silent.
      */
-    private fun startPlaybackLoop() {
-        playbackJob = playbackScope.launch {
-            val mixBuffer = ShortArray(FRAME_SIZE_SAMPLES)
-            val decodeBuffer = ShortArray(FRAME_SIZE_SAMPLES)
-            // Total PCM frames handed to AudioTrack — compared against
-            // playbackHeadPosition to measure the track's buffered depth.
-            var writtenFrames = 0L
-            var currentTrack: AudioTrack? = null
+    private suspend fun runPlaybackLoop() {
+        val mixBuffer = ShortArray(FRAME_SIZE_SAMPLES)
+        val decodeBuffer = ShortArray(FRAME_SIZE_SAMPLES)
+        // Total PCM frames handed to AudioTrack — compared against
+        // playbackHeadPosition to measure the track's buffered depth.
+        var writtenFrames = 0L
+        var currentTrack: AudioTrack? = null
 
-            // Sum one decoded frame into the mix buffer with per-user gain
-            fun mixIn(userId: Int, pcm: ByteArray): Boolean {
-                return try {
-                    bytesToShorts(pcm, decodeBuffer)
-                    val factor = userGainFactors[userId]
-                    if (factor != null && factor != 1f) {
-                        for (i in mixBuffer.indices) {
-                            val sum = mixBuffer[i] + (decodeBuffer[i] * factor).toInt()
-                            mixBuffer[i] = sum.coerceIn(
-                                Short.MIN_VALUE.toInt(),
-                                Short.MAX_VALUE.toInt(),
-                            ).toShort()
-                        }
-                    } else {
-                        // Mix: sum with clipping
-                        for (i in mixBuffer.indices) {
-                            val sum = mixBuffer[i].toInt() + decodeBuffer[i].toInt()
-                            mixBuffer[i] = sum.coerceIn(
-                                Short.MIN_VALUE.toInt(),
-                                Short.MAX_VALUE.toInt(),
-                            ).toShort()
-                        }
+        // Sum one decoded frame into the mix buffer with per-user gain
+        fun mixIn(userId: Int, pcm: ByteArray): Boolean {
+            return try {
+                bytesToShorts(pcm, decodeBuffer)
+                val factor = userGainFactors[userId]
+                if (factor != null && factor != 1f) {
+                    for (i in mixBuffer.indices) {
+                        val sum = mixBuffer[i] + (decodeBuffer[i] * factor).toInt()
+                        mixBuffer[i] = sum.coerceIn(
+                            Short.MIN_VALUE.toInt(),
+                            Short.MAX_VALUE.toInt(),
+                        ).toShort()
                     }
-                    true
-                } catch (_: Exception) {
-                    false
+                } else {
+                    // Mix: sum with clipping
+                    for (i in mixBuffer.indices) {
+                        val sum = mixBuffer[i].toInt() + decodeBuffer[i].toInt()
+                        mixBuffer[i] = sum.coerceIn(
+                            Short.MIN_VALUE.toInt(),
+                            Short.MAX_VALUE.toInt(),
+                        ).toShort()
+                    }
                 }
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        while (currentCoroutineContext().isActive) {
+            var hasData = false
+            mixBuffer.fill(0)
+            val now = System.currentTimeMillis()
+
+            if (now - lastDiagFlush >= DIAG_FLUSH_MS) {
+                lastDiagFlush = now
+                flushAudioDiag()
             }
 
-            while (isActive) {
-                var hasData = false
-                mixBuffer.fill(0)
-                val now = System.currentTimeMillis()
+            // Write-side latency watermark: AudioTrack drains in real
+            // time while this loop writes at decode pace — without a cap,
+            // any burst piles up inside the track buffer and lingers as
+            // sustained latency. Capacity is headroom, this is the bound.
+            val trackNow = synchronized(trackSwapLock) { audioTrack }
+            if (trackNow !== currentTrack) {
+                currentTrack = trackNow
+                writtenFrames = 0L
+            }
+            if (trackNow == null) {
+                // Track released — nothing to write into
+                playbackWake.poll(10, java.util.concurrent.TimeUnit.MILLISECONDS)
+                continue
+            }
+            val head = trackNow.playbackHeadPosition.toLong()
+            val bufferedMs = (writtenFrames - head) * 1000 / SAMPLE_RATE
+            if (bufferedMs > trackBufPeakMs) trackBufPeakMs = bufferedMs
 
-                if (now - lastDiagFlush >= DIAG_FLUSH_MS) {
-                    lastDiagFlush = now
-                    flushAudioDiag()
-                }
+            if (bufferedMs > TARGET_TRACK_BUFFER_MS) {
+                playbackWake.poll(20, java.util.concurrent.TimeUnit.MILLISECONDS)
+                continue
+            }
 
-                // Write-side latency watermark: AudioTrack drains in real
-                // time while this loop writes at decode pace — without a cap,
-                // any burst piles up inside the track buffer and lingers as
-                // sustained latency. Capacity is headroom, this is the bound.
-                val trackNow = synchronized(trackSwapLock) { audioTrack }
-                if (trackNow !== currentTrack) {
-                    currentTrack = trackNow
-                    writtenFrames = 0L
+            // Talkspurt-start priming: hold the first frame(s) until a
+            // tiny backlog exists (depth 2) so the second frame isn't
+            // chased by an underrun — unless the oldest has waited too
+            // long already; onset delay is then capped at ~60ms
+            var totalDepth = 0
+            var oldestAge = Long.MAX_VALUE
+            for ((_, queue) in userQueues) {
+                val s = queue.size
+                if (s > 0) {
+                    totalDepth += s
+                    val age = queue.oldestAgeMs(now)
+                    if (age < oldestAge) oldestAge = age
                 }
-                if (trackNow == null) {
-                    // Track released — nothing to write into
-                    playbackWake.poll(10, java.util.concurrent.TimeUnit.MILLISECONDS)
+            }
+            if (totalDepth in 1 until PRIME_MIN_FRAMES && oldestAge < PRIME_MAX_WAIT_MS) {
+                playbackWake.poll(5, java.util.concurrent.TimeUnit.MILLISECONDS)
+                continue
+            }
+
+            for ((userId, queue) in userQueues) {
+                // A sender whose decoder could not be created is skipped for
+                // the rest of the session: retrying every frame would throw
+                // once per 20ms and log nothing new
+                if (userId in failedDecoders) {
+                    queue.clear()
                     continue
                 }
-                val head = trackNow.playbackHeadPosition.toLong()
-                val bufferedMs = (writtenFrames - head) * 1000 / SAMPLE_RATE
-                if (bufferedMs > trackBufPeakMs) trackBufPeakMs = bufferedMs
-
-                if (bufferedMs > TARGET_TRACK_BUFFER_MS) {
-                    playbackWake.poll(20, java.util.concurrent.TimeUnit.MILLISECONDS)
+                // Decoder creation can throw (native handle exhaustion, OOM).
+                // Outside the per-frame try it used to kill the whole playback
+                // coroutine — and with it everyone's audio
+                val decoder = try {
+                    userDecoders.getOrPut(userId) { OpusCodec(audioConfig) }
+                } catch (t: Throwable) {
+                    failedDecoders.add(userId)
+                    Log.e(TAG, "Opus decoder unavailable for user $userId; skipping that sender", t)
+                    queue.clear()
                     continue
                 }
-
-                // Talkspurt-start priming: hold the first frame(s) until a
-                // tiny backlog exists (depth 2) so the second frame isn't
-                // chased by an underrun — unless the oldest has waited too
-                // long already; onset delay is then capped at ~60ms
-                var totalDepth = 0
-                var oldestAge = Long.MAX_VALUE
-                for ((_, queue) in userQueues) {
-                    val s = queue.size
-                    if (s > 0) {
-                        totalDepth += s
-                        val age = queue.oldestAgeMs(now)
-                        if (age < oldestAge) oldestAge = age
-                    }
-                }
-                if (totalDepth in 1 until PRIME_MIN_FRAMES && oldestAge < PRIME_MAX_WAIT_MS) {
-                    playbackWake.poll(5, java.util.concurrent.TimeUnit.MILLISECONDS)
-                    continue
-                }
-
-                for ((userId, queue) in userQueues) {
-                    val decoder = userDecoders.getOrPut(userId) { OpusCodec(audioConfig) }
-                    val entry = queue.pollFirst()
-                    if (entry == null) {
-                        // Hunger: if this user was talking moments ago, bridge
-                        // the tail with PLC for a few frames, then fall silent
-                        val lastAudio = userLastAudioAt[userId] ?: continue
-                        val streak = userHungerStreak.getOrPut(userId) { 0 }
-                        if (streak < MAX_HUNGER_PLC_FRAMES && now - lastAudio < HUNGER_WINDOW_MS) {
-                            if (mixIn(userId, decoder.decodePlc())) {
-                                hasData = true
-                                userHungerStreak[userId] = streak + 1
-                                userDiag.getOrPut(userId) { UserDiag() }.plc++
-                            }
+                val entry = queue.pollFirst()
+                if (entry == null) {
+                    // Hunger: if this user was talking moments ago, bridge
+                    // the tail with PLC for a few frames, then fall silent
+                    val lastAudio = userLastAudioAt[userId] ?: continue
+                    val streak = userHungerStreak.getOrPut(userId) { 0 }
+                    if (streak < MAX_HUNGER_PLC_FRAMES && now - lastAudio < HUNGER_WINDOW_MS) {
+                        if (mixIn(userId, decoder.decodePlc())) {
+                            hasData = true
+                            userHungerStreak[userId] = streak + 1
+                            userDiag.getOrPut(userId) { UserDiag() }.plc++
                         }
-                        continue
                     }
-                    userHungerStreak[userId] = 0
-                    userLastAudioAt[userId] = now
-                    recordQueueDelayUs((now - entry.enqueuedAt) * 1000)
+                    continue
+                }
+                userHungerStreak[userId] = 0
+                userLastAudioAt[userId] = now
+                recordQueueDelayUs((now - entry.enqueuedAt) * 1000)
 
-                    try {
-                        if (entry.gap > 0) {
-                            // Recover the frame right before this one from its
-                            // embedded FEC data; earlier gaps stay silent
-                            if (mixIn(userId, decoder.decode(entry.frame, true))) {
-                                hasData = true
-                            }
-                        }
-                        if (mixIn(userId, decoder.decode(entry.frame))) {
+                try {
+                    if (entry.gap > 0) {
+                        // Recover the frame right before this one from its
+                        // embedded FEC data; earlier gaps stay silent
+                        if (mixIn(userId, decoder.decode(entry.frame, true))) {
                             hasData = true
                         }
-                    } catch (_: Exception) {}
+                    }
+                    if (mixIn(userId, decoder.decode(entry.frame))) {
+                        hasData = true
+                    }
+                } catch (_: Exception) {}
 
-                    val diag = userDiag.getOrPut(userId) { UserDiag() }
-                    diag.recv++
-                    if (entry.gap > 0) {
-                        diag.lost += entry.gap
-                        diag.fecRepaired++
-                    }
-                    if (queue.size > diag.queuePeak) diag.queuePeak = queue.size
+                val diag = userDiag.getOrPut(userId) { UserDiag() }
+                diag.recv++
+                if (entry.gap > 0) {
+                    diag.lost += entry.gap
+                    diag.fecRepaired++
                 }
+                if (queue.size > diag.queuePeak) diag.queuePeak = queue.size
+            }
 
-                if (hasData) {
-                    // Focus ducking multiplies the user gain — audio stays
-                    // faintly audible under another app's short prompt
-                    val gain = gainFactor * (if (duckedByFocus) DUCK_FACTOR else 1f)
-                    if (gain != 1.0f) {
-                        for (i in mixBuffer.indices) {
-                            mixBuffer[i] = softClip(mixBuffer[i] * gain)
-                        }
+            if (hasData) {
+                // Focus ducking multiplies the user gain — audio stays
+                // faintly audible under another app's short prompt
+                val gain = gainFactor * (if (duckedByFocus) DUCK_FACTOR else 1f)
+                if (gain != 1.0f) {
+                    for (i in mixBuffer.indices) {
+                        mixBuffer[i] = softClip(mixBuffer[i] * gain)
                     }
-                    val track = synchronized(trackSwapLock) { audioTrack }
-                    val bytes = shortsToBytes(mixBuffer)
-                    val written = try {
-                        track?.write(bytes, 0, bytes.size) ?: -1
-                    } catch (t: IllegalStateException) {
-                        // Track released mid-write — drop this frame; the
-                        // next iteration re-reads the field
-                        Log.w(TAG, "Write hit a released track", t)
-                        -1
-                    }
-                    if (written != bytes.size) {
-                        writeFailCount++
-                        if (writeFailCount == 1) {
-                            Log.w(TAG, "AudioTrack.write returned $written of ${bytes.size}")
-                        }
-                    }
-                    val framesWritten = bytes.size / 2
-                    writtenFrames += framesWritten
-                    playbackWritesTotal += framesWritten
-                    // AEC reference: exactly the PCM handed to the speaker
-                    // (post-gain, post-duck, post-softClip) — feeding the raw
-                    // mix pre-DUCK would feed a distorted reference.
-                    if (aecRunning) {
-                        echoReference.push(mixBuffer, SystemClock.elapsedRealtime())
-                    }
-                    // Probe sees the post-gain mix — exactly what the speaker plays
-                    echoProbe.onFarFrame(mixBuffer)
-                    farActiveUntil = now + FAR_ACTIVE_GRACE_MS
-                } else {
-                    // No audio data — block until a frame arrives (producer
-                    // offers the wake signal) or the idle safety-net timeout
-                    // elapses. Speech onset is still instant (offer wakes the
-                    // loop immediately); the long timeout just keeps silence
-                    // at ~4 wakeups/s instead of 50.
-                    playbackWake.poll(250, java.util.concurrent.TimeUnit.MILLISECONDS)
                 }
+                val track = synchronized(trackSwapLock) { audioTrack }
+                val bytes = shortsToBytes(mixBuffer)
+                val written = try {
+                    track?.write(bytes, 0, bytes.size) ?: -1
+                } catch (t: IllegalStateException) {
+                    // Track released mid-write — drop this frame; the
+                    // next iteration re-reads the field
+                    Log.w(TAG, "Write hit a released track", t)
+                    -1
+                }
+                if (written != bytes.size) {
+                    writeFailCount++
+                    if (writeFailCount == 1) {
+                        Log.w(TAG, "AudioTrack.write returned $written of ${bytes.size}")
+                    }
+                }
+                val framesWritten = bytes.size / 2
+                writtenFrames += framesWritten
+                playbackWritesTotal += framesWritten
+                // AEC reference: exactly the PCM handed to the speaker
+                // (post-gain, post-duck, post-softClip) — feeding the raw
+                // mix pre-DUCK would feed a distorted reference.
+                if (aecRunning) {
+                    echoReference.push(mixBuffer, SystemClock.elapsedRealtime())
+                }
+                // Probe sees the post-gain mix — exactly what the speaker plays
+                echoProbe.onFarFrame(mixBuffer)
+                farActiveUntil = now + FAR_ACTIVE_GRACE_MS
+            } else {
+                // No audio data — block until a frame arrives (producer
+                // offers the wake signal) or the idle safety-net timeout
+                // elapses. Speech onset is still instant (offer wakes the
+                // loop immediately); the long timeout just keeps silence
+                // at ~4 wakeups/s instead of 50.
+                playbackWake.poll(250, java.util.concurrent.TimeUnit.MILLISECONDS)
             }
         }
     }
@@ -1275,6 +1336,7 @@ class AudioBridge(
         userDiag.clear()
         userLastAudioAt.clear()
         userHungerStreak.clear()
+        failedDecoders.clear()
     }
 
     /** Emit the 30s receive/encode diagnostic aggregates into AppLog. */
