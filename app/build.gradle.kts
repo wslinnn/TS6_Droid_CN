@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -88,12 +90,31 @@ android {
 }
 
 // Task to build Rust native libraries via cargo-ndk
+//
+// The NDK location comes from the same places the Android plugin uses:
+// $ANDROID_NDK_HOME, then ndk.dir, then <sdk.dir>/ndk/<version>. The old
+// hard-coded "~/Android/Sdk/ndk/..." pointed at a directory that does not
+// exist on this project's Windows machines.
+val ndkVersion = "27.2.12479018"
+
 tasks.register<Exec>("buildRustLibs") {
     workingDir = file("${rootDir}/tslib_multi")
-    environment("ANDROID_NDK_HOME", System.getenv("ANDROID_NDK_HOME")
-        ?: "${System.getProperty("user.home")}/Android/Sdk/ndk/27.2.12479018")
-    environment("ANDROID_NDK", System.getenv("ANDROID_NDK_HOME")
-        ?: "${System.getProperty("user.home")}/Android/Sdk/ndk/27.2.12479018")
+    val localProperties = Properties().apply {
+        val file = rootProject.file("local.properties")
+        if (file.exists()) file.inputStream().use { load(it) }
+    }
+    val sdkDir = localProperties.getProperty("sdk.dir")
+        ?: System.getenv("ANDROID_HOME")
+        ?: System.getenv("ANDROID_SDK_ROOT")
+    val ndkDir = System.getenv("ANDROID_NDK_HOME")
+        ?: localProperties.getProperty("ndk.dir")
+        ?: sdkDir?.let { file("$it/ndk/$ndkVersion").absolutePath }
+    if (ndkDir != null) {
+        environment("ANDROID_NDK_HOME", ndkDir)
+        environment("ANDROID_NDK", ndkDir)
+    } else {
+        logger.warn("buildRustLibs: no NDK found (set ANDROID_NDK_HOME or sdk.dir in local.properties)")
+    }
     environment("CMAKE_POLICY_VERSION_MINIMUM", "3.5")
     commandLine(
         "cargo", "ndk",
@@ -102,7 +123,9 @@ tasks.register<Exec>("buildRustLibs") {
         "-o", "${projectDir}/src/main/jniLibs",
         "build", "--release", "-p", "tslib-jni",
         "--features", "vendored-openssl",
-        "-j10"
+        // -j10 oversubscribed the 4-core dev machines the OpenSSL build runs
+        // on; AGENTS.md documents -j4 for exactly that reason
+        "-j4"
     )
 }
 
