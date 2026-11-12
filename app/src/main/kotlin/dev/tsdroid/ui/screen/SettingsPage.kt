@@ -634,21 +634,25 @@ private fun CustomBackgroundSection(context: Context) {
     var cropBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var hasCustom by remember { mutableStateOf(dev.tsdroid.background.CustomBackgroundManager.hasCustomBackground(context)) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    val decodeScope = rememberCoroutineScope()
 
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            try {
-                val inputStream = context.contentResolver.openInputStream(it)
-                val bitmap = BitmapFactory.decodeStream(inputStream)
-                inputStream?.close()
+            // A gallery photo is easily 40+MP: decoding it full size on Main
+            // is ~190MB of ARGB_8888 (OOM) or seconds of freeze. Decode a
+            // sampled copy off Main, large enough for a full-screen wallpaper.
+            decodeScope.launch {
+                val bitmap = withContext(Dispatchers.IO) {
+                    decodeSampledWallpaper(context, it)
+                }
                 if (bitmap != null) {
                     cropBitmap = bitmap
                     showCropScreen = true
+                } else {
+                    Toast.makeText(context, context.getString(R.string.custom_bg_load_error), Toast.LENGTH_SHORT).show()
                 }
-            } catch (_: Exception) {
-                Toast.makeText(context, context.getString(R.string.custom_bg_load_error), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -970,5 +974,39 @@ private fun openAppDetails(context: Context) {
             ),
         )
     } catch (_: Exception) {
+    }
+}
+
+/**
+ * Decode a picked gallery image at roughly the display size.
+ *
+ * Two passes: bounds first, then a power-of-two `inSampleSize` large enough to
+ * still cover the screen. Full-size decoding of a modern phone photo needs
+ * hundreds of MB and is the difference between a crop dialog and a crash.
+ */
+private fun decodeSampledWallpaper(context: Context, uri: Uri): android.graphics.Bitmap? {
+    val metrics = context.resources.displayMetrics
+    val targetWidth = metrics.widthPixels.coerceAtLeast(1)
+    val targetHeight = metrics.heightPixels.coerceAtLeast(1)
+    return try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, bounds)
+        }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= targetWidth &&
+            bounds.outHeight / (sample * 2) >= targetHeight
+        ) {
+            sample *= 2
+        }
+        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+        context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, options)
+        }
+    } catch (_: Exception) {
+        null
+    } catch (_: OutOfMemoryError) {
+        null
     }
 }
