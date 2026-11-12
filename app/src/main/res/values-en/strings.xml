@@ -104,6 +104,7 @@
     <string name="server_channels">Channels</string>
     <string name="server_uptime">Uptime</string>
     <string name="server_welcome">Welcome message</string>
+    <string name="server_info_unavailable">Server information unavailable</string>
     <string name="identity_section">Identity</string>
     <string name="identity_uid">Identity UID: %1$s</string>
     <string name="identity_uid_none">Not created yet (generated on first connection)</string>

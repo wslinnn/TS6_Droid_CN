@@ -104,6 +104,7 @@
     <string name="server_channels">频道数</string>
     <string name="server_uptime">运行时长</string>
     <string name="server_welcome">欢迎消息</string>
+    <string name="server_info_unavailable">服务器信息暂不可用</string>
     <string name="identity_section">身份</string>
     <string name="identity_uid">身份 UID：%1$s</string>
     <string name="identity_uid_none">尚未生成（首次连接服务器后自动创建）</string>

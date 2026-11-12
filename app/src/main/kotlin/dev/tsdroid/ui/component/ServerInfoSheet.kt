@@ -31,8 +31,6 @@ fun ServerInfoSheet(
     quality: QualitySnapshot?,
     onDismiss: () -> Unit,
 ) {
-    if (info == null) return
-
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -41,6 +39,18 @@ fun ServerInfoSheet(
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            if (info == null) {
+                // The sheet must stay dismissible before the first snapshot
+                // arrives. Returning here instead of composing the sheet left
+                // the caller's `showServerInfo` flag set forever: no panel,
+                // no dismiss callback, and the 5s polling ran for the rest of
+                // the session.
+                Text(
+                    text = stringResource(R.string.server_info_unavailable),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                return@Column
+            }
             Text(
                 text = info.name,
                 style = MaterialTheme.typography.titleMedium,

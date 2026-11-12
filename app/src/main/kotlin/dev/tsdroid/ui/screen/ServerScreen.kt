@@ -794,9 +794,13 @@ fun ServerScreen(
 
     if (showServerInfo) {
         // Polling runs only while the sheet is visible; the first query
-        // fires immediately on open so the numbers aren't connect-time stale
-        LaunchedEffect(showServerInfo) {
+        // fires immediately on open so the numbers aren't connect-time stale.
+        // DisposableEffect, not LaunchedEffect: every exit path from
+        // composition must stop the polling, including a sheet that had no
+        // data to show.
+        DisposableEffect(Unit) {
             viewModel.setServerInfoPolling(true)
+            onDispose { viewModel.setServerInfoPolling(false) }
         }
         ServerInfoSheet(
             info = serverInfo,
