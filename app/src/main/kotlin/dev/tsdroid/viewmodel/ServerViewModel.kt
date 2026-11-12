@@ -618,13 +618,16 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             val uid = user.uid ?: continue
             if (uid.isEmpty()) continue
             if (user.isQuery) continue
-            if (user.avatarId.isNullOrEmpty()) continue  // no avatar on server
-            if (avatarCache.getAvatar(uid) != null) continue
-            if (avatarCache.hasNoAvatar(uid)) continue
+            val avatarId = user.avatarId
+            if (avatarId.isNullOrEmpty()) continue  // no avatar on server
+            // Cache entries carry the avatar id: a changed avatar is a cache
+            // miss instead of a permanent hit on the old bitmap
+            if (avatarCache.getAvatar(uid, avatarId) != null) continue
+            if (avatarCache.hasNoAvatar(uid, avatarId)) continue
             Log.d(TAG, "loadAvatars: launching download for ${user.nickname}")
             viewModelScope.launch {
-                avatarCache.loadAvatar(uid, client)
-                val avatar = avatarCache.getAvatar(uid)
+                avatarCache.loadAvatar(uid, avatarId, client)
+                val avatar = avatarCache.getAvatar(uid, avatarId)
                 if (avatar != null) {
                     // Flags the uid as present in the flow; the avatar cache
                     // owns the bitmap, the flow only mirrors the visible set

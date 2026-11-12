@@ -16,23 +16,50 @@ class AvatarCache(private val cacheDir: File) {
     companion object {
         private const val TAG = "AvatarCache"
         private const val MAX_RETRIES = 5
+
+        /**
+         * How long a negative result is trusted. A user whose avatar download
+         * failed during a network blip used to stay blank for the rest of the
+         * process; retrying after a while (and after a reconnect clears the
+         * cache) recovers without a restart.
+         */
+        private const val NEGATIVE_TTL_MS = 10 * 60 * 1000L
     }
 
+    /** Attempt counter + timestamp for the negative cache. */
+    private class Failures(var count: Int, var at: Long)
+
+    /**
+     * Keyed by uid **and** the server's avatar id: an avatar change must not
+     * hit the old bitmap in memory or on disk. `|` cannot appear in a decoded
+     * uid, so the pair is unambiguous.
+     */
     private val memoryCache = ConcurrentHashMap<String, ImageBitmap>()
     private val loading = ConcurrentHashMap<String, Boolean>()
-    private val failedAttempts = ConcurrentHashMap<String, Int>()
+    private val failures = ConcurrentHashMap<String, Failures>()
     private val avatarsDir = File(cacheDir, "avatars").also { it.mkdirs() }
 
-    fun getAvatar(uid: String): ImageBitmap? = memoryCache[uid]
+    private fun key(uid: String, avatarId: String?): String = "$uid|${avatarId.orEmpty()}"
 
-    fun hasNoAvatar(uid: String): Boolean = (failedAttempts[uid] ?: 0) >= MAX_RETRIES
+    fun getAvatar(uid: String, avatarId: String?): ImageBitmap? = memoryCache[key(uid, avatarId)]
+
+    fun hasNoAvatar(uid: String, avatarId: String?): Boolean {
+        val k = key(uid, avatarId)
+        val failure = failures[k] ?: return false
+        if (failure.count < MAX_RETRIES) return false
+        if (System.currentTimeMillis() - failure.at < NEGATIVE_TTL_MS) return true
+        // Expired: drop it so this call reloads
+        failures.remove(k)
+        return false
+    }
 
     /** Clear memory cache for specific UIDs so next loadAvatar forces re-download */
     fun clearMemoryCache(vararg uids: String) {
         for (uid in uids) {
-            memoryCache.remove(uid)
-            loading.remove(uid)
-            failedAttempts.remove(uid)
+            val prefix = "$uid|"
+            memoryCache.keys.forEach { if (it.startsWith(prefix)) memoryCache.remove(it) }
+            loading.keys.forEach { if (it.startsWith(prefix)) loading.remove(it) }
+            failures.keys.forEach { if (it.startsWith(prefix)) failures.remove(it) }
         }
         Log.d(TAG, "Cleared memory cache for ${uids.size} UID(s)")
     }
@@ -41,7 +68,7 @@ class AvatarCache(private val cacheDir: File) {
     fun clearAllMemoryCache() {
         memoryCache.clear()
         loading.clear()
-        failedAttempts.clear()
+        failures.clear()
         Log.d(TAG, "Cleared ALL memory caches")
     }
 
@@ -56,24 +83,25 @@ class AvatarCache(private val cacheDir: File) {
         val sb = StringBuilder(bytes.size * 2)
         for (b in bytes) {
             val unsigned = b.toInt() and 0xFF
-            sb.append(('a' + (unsigned shr 4)))
-            sb.append(('a' + (unsigned and 0x0F)))
+            sb.append('a' + (unsigned shr 4))
+            sb.append('a' + (unsigned and 0x0F))
         }
         return "/avatar_$sb"
     }
 
-    suspend fun loadAvatar(uid: String, tsClient: TsClient) {
+    suspend fun loadAvatar(uid: String, avatarId: String?, tsClient: TsClient) {
         if (uid.isEmpty()) return
-        if (memoryCache.containsKey(uid)) return
-        if (hasNoAvatar(uid)) return
-        if (loading.putIfAbsent(uid, true) != null) return
+        val k = key(uid, avatarId)
+        if (memoryCache.containsKey(k)) return
+        if (hasNoAvatar(uid, avatarId)) return
+        if (loading.putIfAbsent(k, true) != null) return
 
         try {
             // Disk I/O and the JNI download must not run on the caller's
             // (main) dispatcher — both call sites collect from the UI side
             withContext(Dispatchers.IO) {
-                // UID contains / and = which are invalid in filenames — URL-encode for disk cache
-                val safeFileName = URLEncoder.encode(uid, "UTF-8")
+                // UID/avatar id contain / and = which are invalid in filenames
+                val safeFileName = URLEncoder.encode(k, "UTF-8")
                 val diskFile = File(avatarsDir, safeFileName)
                 var bytes: ByteArray? = null
                 var fromDisk = false
@@ -89,7 +117,7 @@ class AvatarCache(private val cacheDir: File) {
                 if (fromDisk && bytes != null) {
                     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     if (bitmap != null) {
-                        memoryCache[uid] = bitmap.asImageBitmap()
+                        memoryCache[k] = bitmap.asImageBitmap()
                         Log.d(TAG, "Loaded avatar from disk cache for $uid")
                         return@withContext
                     }
@@ -104,8 +132,8 @@ class AvatarCache(private val cacheDir: File) {
                 bytes = tsClient.downloadFile(0L, path)
 
                 if (bytes == null || bytes.isEmpty()) {
-                    Log.w(TAG, "Download returned empty/null for $uid (attempt ${(failedAttempts[uid] ?: 0) + 1}/$MAX_RETRIES)")
-                    failedAttempts.merge(uid, 1, Integer::sum)
+                    Log.w(TAG, "Download returned empty/null for $uid (attempt ${(failures[k]?.count ?: 0) + 1}/$MAX_RETRIES)")
+                    recordFailure(k)
                     return@withContext
                 }
 
@@ -114,18 +142,28 @@ class AvatarCache(private val cacheDir: File) {
                 val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 if (bitmap != null) {
                     diskFile.writeBytes(bytes)
-                    memoryCache[uid] = bitmap.asImageBitmap()
+                    memoryCache[k] = bitmap.asImageBitmap()
                     Log.i(TAG, "Avatar loaded for $uid")
                 } else {
                     Log.w(TAG, "Failed to decode downloaded avatar for $uid (${bytes.size} bytes)")
-                    failedAttempts.merge(uid, 1, Integer::sum)
+                    recordFailure(k)
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to load avatar for $uid", e)
-            failedAttempts.merge(uid, 1, Integer::sum)
+            recordFailure(k)
         } finally {
-            loading.remove(uid)
+            loading.remove(k)
+        }
+    }
+
+    private fun recordFailure(k: String) {
+        val now = System.currentTimeMillis()
+        failures.compute(k) { _, existing ->
+            if (existing == null) Failures(1, now) else existing.also {
+                it.count++
+                it.at = now
+            }
         }
     }
 }

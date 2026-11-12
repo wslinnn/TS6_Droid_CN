@@ -271,7 +271,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                                 val speakerUser = tsClient.users.value.find { it.id == speakerId }
                                 val uid = speakerUser?.uid
                                 overlayActiveSpeakerAvatar =
-                                    if (!uid.isNullOrEmpty()) avatarCache.getAvatar(uid) else null
+                                    if (!uid.isNullOrEmpty()) avatarCache.getAvatar(uid, speakerUser?.avatarId) else null
                             }
                         }
                     }
@@ -335,7 +335,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                         val localUser = tsClient.users.value.find { it.id == myId }
                         val localUid = localUser?.uid
                         if (!localUid.isNullOrEmpty()) {
-                            overlayActiveSpeakerAvatar = avatarCache.getAvatar(localUid)
+                            overlayActiveSpeakerAvatar = avatarCache.getAvatar(localUid, localUser?.avatarId)
                         }
                     }
                 }
@@ -1051,7 +1051,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                 val displayAvatar = if (isLocalUserSpeaking) {
                     // When local user is speaking, show our own avatar
                     if (!localUid.isNullOrEmpty()) {
-                        val cached = avatarCache.getAvatar(localUid)
+                        val cached = avatarCache.getAvatar(localUid, localUser?.avatarId)
                         if (cached != null) cached else activeSpeakerAvatar
                     } else {
                         activeSpeakerAvatar
@@ -1062,7 +1062,7 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                 } else {
                     // When nobody is speaking, still show local user avatar
                     if (!localUid.isNullOrEmpty()) {
-                        avatarCache.getAvatar(localUid)
+                        avatarCache.getAvatar(localUid, localUser?.avatarId)
                     } else null
                 }
                 
@@ -1209,18 +1209,18 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
 
                                     LaunchedEffect(user.uid) {
                                         if (!user.uid.isNullOrEmpty()) {
-                                            val cached = avatarCache.getAvatar(user.uid)
+                                            val cached = avatarCache.getAvatar(user.uid, user.avatarId)
                                             if (cached != null) {
                                                 avatarBitmap = cached
-                                            } else if (!avatarCache.hasNoAvatar(user.uid)) {
+                                            } else if (!avatarCache.hasNoAvatar(user.uid, user.avatarId)) {
                                                 // The download spans several user-list
                                                 // re-emissions (connect storm) — on resume,
                                                 // skip the write if this slot was recreated:
                                                 // writing a disposed remember state races
                                                 // composition apply and crashes the Recomposer
-                                                avatarCache.loadAvatar(user.uid, tsClient)
+                                                avatarCache.loadAvatar(user.uid, user.avatarId, tsClient)
                                                 if (isActive) {
-                                                    avatarBitmap = avatarCache.getAvatar(user.uid)
+                                                    avatarBitmap = avatarCache.getAvatar(user.uid, user.avatarId)
                                                 }
                                             }
                                         }
