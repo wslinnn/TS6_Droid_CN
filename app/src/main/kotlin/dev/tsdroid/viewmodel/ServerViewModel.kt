@@ -124,8 +124,18 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
      * server echo marks the pending entry confirmed (accepted), so a command
      * error rolls back only still-unconfirmed echoes — failures of unrelated
      * commands (channel moves etc.) can no longer delete an accepted message.
+     *
+     * [message] is the exact instance appended to the history, so the rollback
+     * removes that bubble and not "the first bubble with the same text": two
+     * identical messages in different channels/tabs used to confuse the match.
      */
-    private class PendingEcho(val target: String, val convKey: String?, val text: String, val at: Long) {
+    private class PendingEcho(
+        val target: String,
+        val convKey: String?,
+        val text: String,
+        val at: Long,
+        val message: ChatMessage,
+    ) {
         var confirmed = false
     }
     private val pendingOwnEchoes = ArrayDeque<PendingEcho>()
@@ -143,23 +153,25 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         val idx = pendingOwnEchoes.indexOfFirst { !it.confirmed }
         if (idx < 0) return
         val pending = pendingOwnEchoes.removeAt(idx)
+        var removed = false
         if (pending.target == "channel") {
             val list = _channelMessages.value.toMutableList()
-            val idx = list.indexOfFirst { it.isMe && it.text == pending.text && it.timestamp >= pending.at }
-            if (idx >= 0) {
-                list.removeAt(idx)
+            if (list.remove(pending.message)) {
                 _channelMessages.value = list
+                removed = true
             }
         } else {
             val convKey = pending.convKey ?: return
             val existing = _privateMessages.value[convKey] ?: return
             val list = existing.toMutableList()
-            val idx = list.indexOfFirst { it.isMe && it.text == pending.text && it.timestamp >= pending.at }
-            if (idx >= 0) {
-                list.removeAt(idx)
+            if (list.remove(pending.message)) {
                 _privateMessages.value = _privateMessages.value.toMutableMap().apply { put(convKey, list) }
+                removed = true
             }
         }
+        // Persist the rollback: without this the bubble came back after a
+        // restart (the message was already written by the deferred save)
+        if (removed) scheduleSave()
     }
 
     private val messageStore = MessageStore(application)
@@ -902,10 +914,11 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             return false
         }
         tsClient?.sendChannelMessage(text)
-        _channelMessages.value = _channelMessages.value + ChatMessage(
+        val msg = ChatMessage(
             sender = getApplication<Application>().getString(R.string.me_sender), text = text, isMe = true,
         )
-        pendingOwnEchoes.addLast(PendingEcho("channel", null, text, System.currentTimeMillis()))
+        _channelMessages.value = _channelMessages.value + msg
+        pendingOwnEchoes.addLast(PendingEcho("channel", null, text, System.currentTimeMillis(), msg))
         scheduleSave()
         return true
     }
@@ -942,7 +955,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         val current = _privateMessages.value.toMutableMap()
         current[convKey] = (current[convKey] ?: emptyList()) + msg
         _privateMessages.value = current
-        pendingOwnEchoes.addLast(PendingEcho("private", convKey, text, System.currentTimeMillis()))
+        pendingOwnEchoes.addLast(PendingEcho("private", convKey, text, System.currentTimeMillis(), msg))
         scheduleSave()
         return true
     }
