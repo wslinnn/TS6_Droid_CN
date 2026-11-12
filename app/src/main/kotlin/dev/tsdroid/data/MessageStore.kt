@@ -5,6 +5,11 @@ import android.util.Log
 import dev.tsdroid.viewmodel.ChatMessage
 import dev.tsdroid.viewmodel.FileAttachment
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class MessageStore(private val context: Context) {
 
@@ -14,6 +19,15 @@ class MessageStore(private val context: Context) {
     }
 
     private val messagesDir = File(context.filesDir, "messages")
+
+    /**
+     * Saving is a full JSON rebuild of up to 500 channel messages plus every
+     * private conversation — far too heavy for Main, where every send, read
+     * marker, disconnect and onCleared used to do it. One dedicated thread
+     * serializes the writes, so the last save always wins.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val saveScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
 
     /** Persisted chat history plus the unread counters that go with it.
      *  Private conversations are keyed by peer uid (or synthetic "clid:<n>"). */
@@ -35,6 +49,10 @@ class MessageStore(private val context: Context) {
         }
     }
 
+    /**
+     * Queues a save. The caller's lists are immutable snapshots, so they can
+     * be serialized off-thread; this returns immediately.
+     */
     fun save(
         serverAddress: String,
         channelMessages: List<ChatMessage>,
@@ -42,12 +60,14 @@ class MessageStore(private val context: Context) {
         unreadChannel: Int,
         unreadPrivate: Map<String, Int>,
     ) {
-        try {
-            messagesDir.mkdirs()
-            val json = serializeServerMessages(channelMessages, privateMessages, unreadChannel, unreadPrivate)
-            fileFor(serverAddress).writeText(json)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to save messages for $serverAddress", e)
+        saveScope.launch {
+            try {
+                messagesDir.mkdirs()
+                val json = serializeServerMessages(channelMessages, privateMessages, unreadChannel, unreadPrivate)
+                fileFor(serverAddress).writeText(json)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save messages for $serverAddress", e)
+            }
         }
     }
 

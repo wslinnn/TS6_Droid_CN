@@ -521,7 +521,10 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 val addr = service.tsClient.serverAddress
                 if (!addr.isNullOrEmpty()) {
                     serverAddress = addr
-                    val stored = messageStore.load(addr)
+                    // Reading and parsing the history is disk I/O plus a JSON
+                    // parse of up to 500 messages per conversation — keep it
+                    // off Main, where it used to stall the screen entry
+                    val stored = withContext(Dispatchers.IO) { messageStore.load(addr) }
                     if (stored.channelMessages.isNotEmpty()) _channelMessages.value = stored.channelMessages.map { migrateMessage(it) }
                     if (stored.privateMessages.isNotEmpty()) _privateMessages.value = stored.privateMessages.mapValues { (_, msgs) -> msgs.map { migrateMessage(it) } }
                     if (stored.unreadChannel > 0) _unreadChannel.value = stored.unreadChannel
