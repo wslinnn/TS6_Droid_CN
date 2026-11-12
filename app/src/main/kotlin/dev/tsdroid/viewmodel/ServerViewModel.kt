@@ -106,6 +106,17 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         /** How long the post-reconnect channel rejoin waits for the channel list. */
         private const val REJOIN_CHANNEL_TIMEOUT_MS = 8_000L
         private const val REJOIN_CHANNEL_POLL_MS = 400L
+
+        /**
+         * Upper bounds for the in-memory image caches. A decoded preview is
+         * up to ~6MB (1280px ARGB_8888), avatars/icons are small: keeping the
+         * hot set bounded stops a long session in an image-heavy channel from
+         * growing until the system kills the process. Evicted previews are
+         * re-decoded from the on-disk cache on demand.
+         */
+        private const val MAX_DOWNLOAD_CACHE = 12
+        private const val MAX_AVATAR_CACHE = 400
+        private const val MAX_CHANNEL_ICON_CACHE = 200
     }
 
     /**
@@ -160,8 +171,14 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     private val fileCache = FileCache(application)
     private var serverAddress: String? = null
     private var saveJob: Job? = null
-    // In-memory cache: avoids re-reading from disk + re-decoding for the same image
-    private val downloadCache = mutableMapOf<String, StateFlow<DownloadState>>()
+    // In-memory cache: avoids re-reading from disk + re-decoding for the same
+    // image. LRU-bounded (each entry may hold a decoded preview) and accessed
+    // from both Main and the download coroutine, hence the lock.
+    private val downloadCache = object : LinkedHashMap<String, StateFlow<DownloadState>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, StateFlow<DownloadState>>): Boolean =
+            size > MAX_DOWNLOAD_CACHE
+    }
+    private val downloadCacheLock = Any()
 
     private val _previewImageBitmap = MutableStateFlow<ImageBitmap?>(null)
     val previewImageBitmap: StateFlow<ImageBitmap?> = _previewImageBitmap.asStateFlow()
@@ -581,7 +598,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 iconCache.loadIcon(iconId, client)
                 val icon = iconCache.getIcon(iconId)
                 if (icon != null) {
-                    _channelIcons.value = _channelIcons.value + (iconId to icon)
+                    _channelIcons.value = boundedAppend(_channelIcons.value, iconId, icon, MAX_CHANNEL_ICON_CACHE)
                 }
             }
         }
@@ -591,7 +608,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             iconCache.getIcon(iconId)?.let { cached[iconId] = it }
         }
         if (cached.isNotEmpty() && cached != _channelIcons.value) {
-            _channelIcons.value = _channelIcons.value + cached
+            _channelIcons.value = boundMap(_channelIcons.value + cached, MAX_CHANNEL_ICON_CACHE)
         }
     }
 
@@ -609,11 +626,28 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 avatarCache.loadAvatar(uid, client)
                 val avatar = avatarCache.getAvatar(uid)
                 if (avatar != null) {
-                    _avatars.value = _avatars.value + (uid to avatar)
+                    // Flags the uid as present in the flow; the avatar cache
+                    // owns the bitmap, the flow only mirrors the visible set
+                    _avatars.value = boundedAppend(_avatars.value, uid, avatar, MAX_AVATAR_CACHE)
                     Log.i(TAG, "loadAvatars: avatar loaded for ${user.nickname}")
                 }
             }
         }
+    }
+
+    /**
+     * Append one entry to an insertion-ordered map while keeping at most
+     * [max] entries. `+` preserves iteration order and appends, so dropping
+     * from the front evicts the least recently added value.
+     */
+    private fun <K, V> boundedAppend(map: Map<K, V>, key: K, value: V, max: Int): Map<K, V> =
+        boundMap(map + (key to value), max)
+
+    private fun <K, V> boundMap(map: Map<K, V>, max: Int): Map<K, V> {
+        if (map.size <= max) return map
+        val out = LinkedHashMap<K, V>(max * 2)
+        for (entry in map.entries.drop(map.size - max)) out[entry.key] = entry.value
+        return out
     }
 
     private fun handleEvent(event: Event) {
@@ -1231,9 +1265,8 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         val cacheKey = "$host/$cachePath"
 
         // Return existing in-memory result if already loaded
-        downloadCache[cacheKey]?.let { existing ->
-            if (existing.value is DownloadState.Done) return existing
-        }
+        val cachedState = synchronized(downloadCacheLock) { downloadCache[cacheKey] }
+        if (cachedState != null && cachedState.value is DownloadState.Done) return cachedState
 
         val state = MutableStateFlow<DownloadState>(DownloadState.Downloading)
         if (remotePath == null) {
@@ -1255,7 +1288,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             return state
         }
 
-        downloadCache[cacheKey] = state
+        synchronized(downloadCacheLock) { downloadCache[cacheKey] = state }
 
         viewModelScope.launch(Dispatchers.IO) {
             // Check disk cache first
@@ -1277,7 +1310,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                     state.value = DownloadState.Done(null, dlUri)
                 }
             } else {
-                downloadCache.remove(cacheKey)
+                synchronized(downloadCacheLock) { downloadCache.remove(cacheKey) }
                 state.value = DownloadState.Error(getApplication<Application>().getString(R.string.download_failed))
             }
         }
@@ -1599,11 +1632,28 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         _sessionClosed.value = true
         saveNow()
         queriedPermChannels.clear()
+        clearImageCaches()
         connectionService?.disconnect()
+    }
+
+    /**
+     * Drop every decoded image held for the current server. Avatars and
+     * channel icons are keyed by session ids that another server can reuse,
+     * and a long session in an image-heavy channel would otherwise grow
+     * until the system kills the process.
+     */
+    private fun clearImageCaches() {
+        synchronized(downloadCacheLock) { downloadCache.clear() }
+        _avatars.value = emptyMap()
+        _channelIcons.value = emptyMap()
+        avatarCache.clearAllMemoryCache()
+        iconCache.clearMemoryCache()
+        _previewImageBitmap.value = null
     }
 
     override fun onCleared() {
         saveNow()
+        clearImageCaches()
         bound = false
         tsClient = null
         audioBridge = null

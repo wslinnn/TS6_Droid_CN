@@ -19,6 +19,13 @@ class IconCache(private val cacheDir: File) {
 
     fun getIcon(iconId: Long): ImageBitmap? = memoryCache[iconId]
 
+    /** Drops the decoded icons; the on-disk copies stay warm. */
+    fun clearMemoryCache() {
+        memoryCache.clear()
+        loading.clear()
+        Log.d(TAG, "Cleared icon memory cache")
+    }
+
     fun hasCached(iconId: Long): Boolean =
         memoryCache.containsKey(iconId) || File(iconsDir, iconId.toString()).exists()
 
