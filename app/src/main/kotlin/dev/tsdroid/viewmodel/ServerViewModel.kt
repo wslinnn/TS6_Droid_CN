@@ -31,6 +31,7 @@ import dev.tsdroid.data.BookmarkStore
 import dev.tsdroid.data.MessageStore
 import dev.tsdroid.data.ServerErrorText
 import dev.tsdroid.data.SettingsStore
+import dev.tsdroid.data.Ts3FileLink
 import dev.tsdroid.data.UserAudioStore
 import dev.tsdroid.service.ReconnectBackoff
 import dev.tsdroid.service.TsConnectionService
@@ -62,6 +63,8 @@ data class FileAttachment(
     val fileId: String,
     val isImage: Boolean,
     val channelId: Long = 0L,
+    /** Server-side directory the file lives in ("/" = channel root). */
+    val path: String = "/",
 )
 
 data class ChatMessage(
@@ -783,22 +786,18 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 FileAttachment(fileName, fileSize, fileId, isImage)
             } catch (_: Exception) { null }
         }
-        // TS3 file transfer URL format: ts3file://host?port=...&channel=...&filename=...&size=...
-        val ts3Start = text.indexOf("ts3file://")
-        if (ts3Start >= 0) {
-            return try {
-                // Extract the ts3file:// URL (until whitespace or end of string)
-                val urlStr = text.substring(ts3Start).takeWhile { !it.isWhitespace() }
-                val uri = android.net.Uri.parse(urlStr)
-                val fileName = uri.getQueryParameter("filename") ?: return null
-                val fileSize = uri.getQueryParameter("size")?.toLongOrNull() ?: 0L
-                val channelId = uri.getQueryParameter("channel")?.toLongOrNull() ?: 0L
-                val ext = fileName.substringAfterLast('.', "").lowercase()
-                val isImage = ext in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
-                FileAttachment(fileName, fileSize, fileId = "", isImage, channelId = channelId)
-            } catch (_: Exception) { null }
-        }
-        return null
+        // TS3 file transfer URL format: ts3file://host?port=...&channel=...&path=...&filename=...&size=...
+        val link = Ts3FileLink.parse(text) ?: return null
+        val ext = link.fileName.substringAfterLast('.', "").lowercase()
+        val isImage = ext in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
+        return FileAttachment(
+            fileName = link.fileName,
+            fileSize = link.size,
+            fileId = "",
+            isImage = isImage,
+            channelId = link.channelId,
+            path = link.path,
+        )
     }
 
     /** Re-parse old saved messages that contain ts3file:// but have no fileAttachment. */
@@ -1133,23 +1132,6 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         return _rawUsers.value.find { it.id == myId }?.channelId ?: 0
     }
 
-    /** Build a ts3file:// link with URL-encoded parameters so names with
-     *  spaces, '&', '=' or CJK survive Uri.getQueryParameter on the receiver. */
-    private fun buildTs3FileUrl(
-        host: String,
-        port: String,
-        channelId: Long,
-        path: String,
-        fileName: String,
-        size: Long,
-        fileDateTime: Long? = null,
-    ): String {
-        fun enc(raw: String): String = java.net.URLEncoder.encode(raw, "UTF-8")
-        return "ts3file://${enc(host)}?port=${enc(port)}&channel=$channelId" +
-            "&path=${enc(path)}&filename=${enc(fileName)}&isDir=0&size=$size" +
-            (fileDateTime?.let { "&fileDateTime=$it" } ?: "")
-    }
-
     fun uploadAndSendFile(fileName: String, data: ByteArray, isPrivate: Boolean, targetKey: String?) {
         val client = tsClient ?: return
         val channelId = currentChannelId()
@@ -1171,7 +1153,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 val host = addr.substringBefore(':')
                 val port = addr.substringAfter(':', "9987")
                 val fileDateTime = System.currentTimeMillis() / 1000
-                val ts3Url = buildTs3FileUrl(host, port, channelId, "/", fileName, data.size.toLong(), fileDateTime)
+                val ts3Url = Ts3FileLink.build(host, port, channelId, "/", fileName, data.size.toLong(), fileDateTime)
 
                 val ext = fileName.substringAfterLast('.', "").lowercase()
                 val isImage = ext in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
@@ -1197,9 +1179,12 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     fun downloadAttachment(attachment: FileAttachment): StateFlow<DownloadState> {
         val channelId = if (attachment.channelId != 0L) attachment.channelId else currentChannelId()
         val host = serverAddress?.substringBefore(':') ?: "unknown"
-        // Include the channel in the cache path: identical file names in
-        // different channels must not collide
-        val cachePath = "ch$channelId/" + attachment.fileName.trimStart('/')
+        // The server path carries the directory: a file shared from /music
+        // must be requested as /music/song.mp3 (asking for /song.mp3 fails),
+        // and identical names in different directories must not share a
+        // cache slot.
+        val remotePath = Ts3FileLink.filePath(attachment.path, attachment.fileName)
+        val cachePath = "ch$channelId/" + (remotePath ?: attachment.fileName.trimStart('/')).trimStart('/')
         val cacheKey = "$host/$cachePath"
 
         // Return existing in-memory result if already loaded
@@ -1208,6 +1193,12 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         val state = MutableStateFlow<DownloadState>(DownloadState.Downloading)
+        if (remotePath == null) {
+            // Unusable path or file name in the message: refuse rather than
+            // silently asking the channel root for a different file
+            state.value = DownloadState.Error(getApplication<Application>().getString(R.string.download_failed))
+            return state
+        }
         val client = tsClient ?: run {
             state.value = DownloadState.Error(getApplication<Application>().getString(R.string.error_not_connected))
             return state
@@ -1226,7 +1217,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch(Dispatchers.IO) {
             // Check disk cache first
             val cached = fileCache.get(host, cachePath)
-            val bytes = cached ?: client.downloadFile(channelId, "/${attachment.fileName}")
+            val bytes = cached ?: client.downloadFile(channelId, remotePath)
 
             if (bytes != null) {
                 // Save to disk cache if this was a fresh download
@@ -1383,10 +1374,13 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         val host = addr.substringBefore(':')
         val port = addr.substringAfter(':', "9987")
         val currentPath = _currentFilePath.value
-        val ts3Url = buildTs3FileUrl(host, port, channelId, currentPath, fileName, fileSize)
+        val fileDir = Ts3FileLink.normalizePath(currentPath) ?: "/"
+        val ts3Url = Ts3FileLink.build(host, port, channelId, fileDir, fileName, fileSize)
         val ext = fileName.substringAfterLast('.', "").lowercase()
         val isImage = ext in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
-        val attachment = FileAttachment(fileName, fileSize, fileId = "", isImage, channelId = channelId)
+        val attachment = FileAttachment(
+            fileName, fileSize, fileId = "", isImage, channelId = channelId, path = fileDir,
+        )
         val meSender = getApplication<Application>().getString(R.string.me_sender)
 
         if (targetUserId != null) {

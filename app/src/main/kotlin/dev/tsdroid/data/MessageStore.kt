@@ -105,6 +105,7 @@ class MessageStore(private val context: Context) {
                         put("fi", fa.fileId)
                         put("im", fa.isImage)
                         put("ch", fa.channelId)
+                        put("p", fa.path)
                     }
                 )
             }
@@ -175,6 +176,9 @@ class MessageStore(private val context: Context) {
                         fileId = fa.optString("fi"),
                         isImage = fa.optBoolean("im", false),
                         channelId = fa.optLong("ch", 0),
+                        // Older records predate the path field; those files
+                        // were always shared from the channel root
+                        path = fa.optString("p", "/").ifEmpty { "/" },
                     )
                 },
             )
