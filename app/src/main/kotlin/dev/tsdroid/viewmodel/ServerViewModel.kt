@@ -1289,14 +1289,16 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun downloadAttachment(attachment: FileAttachment): StateFlow<DownloadState> {
         val channelId = if (attachment.channelId != 0L) attachment.channelId else currentChannelId()
-        val host = serverAddress?.substringBefore(':') ?: "unknown"
+        // The cache key must identify the server completely: two servers on
+        // the same host with different ports used to share attachments
+        val serverKey = serverCacheKey()
         // The server path carries the directory: a file shared from /music
         // must be requested as /music/song.mp3 (asking for /song.mp3 fails),
         // and identical names in different directories must not share a
         // cache slot.
         val remotePath = Ts3FileLink.filePath(attachment.path, attachment.fileName)
         val cachePath = "ch$channelId/" + (remotePath ?: attachment.fileName.trimStart('/')).trimStart('/')
-        val cacheKey = "$host/$cachePath"
+        val cacheKey = "$serverKey/$cachePath"
 
         // Return existing in-memory result if already loaded
         val cachedState = synchronized(downloadCacheLock) { downloadCache[cacheKey] }
@@ -1327,18 +1329,18 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch(Dispatchers.IO) {
             // Check disk cache first
-            val cached = fileCache.get(host, cachePath)
+            val cached = fileCache.get(serverKey, cachePath)
             val bytes = cached ?: client.downloadFile(channelId, remotePath)
 
             if (bytes != null) {
                 // Save to disk cache if this was a fresh download
                 if (cached == null) {
-                    fileCache.put(host, cachePath, bytes)
+                    fileCache.put(serverKey, cachePath, bytes)
                 }
 
                 if (attachment.isImage) {
                     val bmp = decodeSampledBitmap(bytes, 1280)
-                    val uri = fileCache.getUri(host, cachePath)
+                    val uri = fileCache.getUri(serverKey, cachePath)
                     state.value = DownloadState.Done(bmp?.asImageBitmap(), uri)
                 } else {
                     val dlUri = saveToDownloads(attachment.fileName.substringAfterLast('/'), bytes)
@@ -1351,6 +1353,14 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         }
         return state
     }
+
+    /**
+     * Filesystem-safe cache directory name for the current server. The full
+     * address (host **and port**) is used: two servers on the same host used
+     * to share one cache directory and could serve each other's files.
+     */
+    private fun serverCacheKey(): String =
+        serverAddress?.replace(Regex("[^A-Za-z0-9._-]"), "_") ?: "unknown"
 
     private suspend fun saveToDownloads(fileName: String, data: ByteArray): android.net.Uri? {
         val context = getApplication<Application>()
@@ -1518,15 +1528,15 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         val channelId = currentChannelId()
         val currentPath = _currentFilePath.value
         val fullName = currentPath.trimStart('/') + fileName
-        val host = serverAddress?.substringBefore(':') ?: "unknown"
+        val serverKey = serverCacheKey()
         val cachePath = "ch$channelId/$fullName"
 
         viewModelScope.launch(Dispatchers.IO) {
-            val cached = fileCache.get(host, cachePath)
+            val cached = fileCache.get(serverKey, cachePath)
             val bytes = cached ?: client.downloadFile(channelId, "/$fullName")
             if (bytes != null) {
                 if (cached == null) {
-                    fileCache.put(host, cachePath, bytes)
+                    fileCache.put(serverKey, cachePath, bytes)
                 }
                 val dlUri = saveToDownloads(fileName, bytes)
                 if (dlUri != null) {
@@ -1543,15 +1553,15 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
         val channelId = currentChannelId()
         val currentPath = _currentFilePath.value
         val fullName = currentPath.trimStart('/') + fileName
-        val host = serverAddress?.substringBefore(':') ?: "unknown"
+        val serverKey = serverCacheKey()
         val cachePath = "ch$channelId/$fullName"
 
         viewModelScope.launch(Dispatchers.IO) {
-            val cached = fileCache.get(host, cachePath)
+            val cached = fileCache.get(serverKey, cachePath)
             val bytes = cached ?: client.downloadFile(channelId, "/$fullName")
             if (bytes != null) {
                 if (cached == null) {
-                    fileCache.put(host, cachePath, bytes)
+                    fileCache.put(serverKey, cachePath, bytes)
                 }
                 // Decode off the main thread, sampled to a sane size
                 val bitmap = withContext(Dispatchers.Default) {
