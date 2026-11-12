@@ -17,27 +17,17 @@ class TsDroidApp : Application() {
         /** Activities currently started — pokes only notify when none exist. */
         private var startedActivities = 0
         val isAppForeground: Boolean get() = startedActivities > 0
-
-        init {
-            System.loadLibrary("tslib_jni")
-        }
     }
 
     override fun onCreate() {
-        // 崩溃陷阱：未捕获异常的堆栈写入 filesDir/last_crash.txt，下次启动在
-        // 界面上展示并可一键复制（无 adb 环境时也能拿到闪退原因）。
-        val previous = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            runCatching {
-                File(filesDir, "last_crash.txt").writeText(
-                    buildString {
-                        appendLine("thread=${thread.name}")
-                        appendLine(Log.getStackTraceString(throwable))
-                    },
-                )
-            }
-            previous?.uncaughtException(thread, throwable)
-        }
+        // Crash trap installed FIRST. Loading the native library is precisely
+        // the step that fails on an ABI/.so mismatch, and it used to run in
+        // the companion initializer — before this handler existed — so the one
+        // crash worth diagnosing ("JNI version mismatch") never produced a
+        // last_crash.txt. Now the failure lands in the file and is rethrown.
+        installCrashHandler()
+        System.loadLibrary("tslib_jni")
+
         super.onCreate()
         // In-app log ring mirrors the debuggable gate that also hides the
         // viewer entry — release builds skip per-line capture entirely
@@ -60,6 +50,25 @@ class TsDroidApp : Application() {
             override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: Bundle) {}
             override fun onActivityDestroyed(activity: android.app.Activity) {}
         })
+    }
+
+    /**
+     * 崩溃陷阱：未捕获异常的堆栈写入 filesDir/last_crash.txt，下次启动在
+     * 界面上展示并可一键复制（无 adb 环境时也能拿到闪退原因）。
+     */
+    private fun installCrashHandler() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            runCatching {
+                File(filesDir, "last_crash.txt").writeText(
+                    buildString {
+                        appendLine("thread=${thread.name}")
+                        appendLine(Log.getStackTraceString(throwable))
+                    },
+                )
+            }
+            previous?.uncaughtException(thread, throwable)
+        }
     }
 
     private fun createNotificationChannels() {
