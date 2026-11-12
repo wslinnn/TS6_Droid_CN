@@ -283,6 +283,15 @@ class AudioBridge(
     private var captureJob: Job? = null
     private var playbackJob: Job? = null
 
+    /**
+     * Capture-session generation, bumped by every startCapture(). The loop's
+     * cleanup only touches session-wide state (_isCapturing, the AEC reference
+     * feed) while it still owns the current generation: a recorder whose
+     * blocking read returns after a watchdog stop→start cycle must not stop
+     * the replacement session's mic or unhook its AEC.
+     */
+    private val captureGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+
     // Dedicated single-thread scope for audio playback
     @OptIn(ExperimentalCoroutinesApi::class)
     private val playbackScope = CoroutineScope(
@@ -409,6 +418,45 @@ class AudioBridge(
         tsClient.setCaptureActive(active)
     }
 
+    /**
+     * [setCapturing] restricted to the capture session that still owns the
+     * mic. A recorder whose blocking read returns after a watchdog
+     * stop→start cycle must not clear the flag the replacement session set.
+     */
+    private fun setCapturingIfCurrent(generation: Int, active: Boolean) {
+        if (captureGeneration.get() == generation) setCapturing(active)
+    }
+
+    /**
+     * Tear down one capture session. Runs in a `finally`, so cancellation and
+     * exceptions release this session's AEC engine too — and compares the
+     * generation before touching session-wide state: when this loop already
+     * lost the mic to a newer startCapture (its read returned late after a
+     * watchdog restart), the new session owns `_isCapturing`, the reference
+     * feed and the echo canceller, and only this session's own engine and
+     * recorder are released here.
+     */
+    private fun endCaptureSession(generation: Int, aec: EchoCanceller?, record: AudioRecord?) {
+        if (captureGeneration.get() == generation) {
+            setCapturing(false)
+            _isLocalVoiceActive.value = false
+            // Stop the reference feed before tearing the engine down; both
+            // are synchronized, so a concurrent playback push can never touch
+            // a destroyed native handle.
+            aecRunning = false
+            echoCancellerRef = null
+            echoReference.reset()
+        }
+        try {
+            aec?.close()
+        } catch (_: Throwable) {}
+        // Release only the local handle. The audioRecord field belongs to
+        // startCapture/stopCapture on the caller thread, so this late cleanup
+        // can never clear or double-release a replacement instance from a
+        // quick stop→start cycle.
+        record?.let { recorderStopper.stopAndRelease(it) }
+    }
+
     @SuppressLint("MissingPermission")
     fun startCapture(scope: CoroutineScope) {
         if (_isCapturing.value) return
@@ -426,258 +474,276 @@ class AudioBridge(
         lastCaptureProgressAt = SystemClock.elapsedRealtime()
         requestAudioFocus()
 
+        val generation = captureGeneration.incrementAndGet()
         captureJob = scope.launch(Dispatchers.IO) {
-            val buffer = ShortArray(FRAME_SIZE_SAMPLES)
-            val codec = encoder ?: run {
-                Log.e(TAG, "Cannot start capture: Opus encoder is not initialized")
-                setCapturing(false)
-                return@launch
-            }
-            var record = audioRecord ?: run {
-                Log.e(TAG, "Cannot start capture: AudioRecord missing")
-                setCapturing(false)
-                return@launch
-            }
-            // Self-heal bookkeeping. The capture device can die under our
-            // feet — aggressive ROMs invalidate VOICE_COMMUNICATION records
-            // in the background, device switches leave stale handles. Read
-            // errors and repeated empty reads are hard-death fingerprints:
-            // rebuild immediately. All-zero PCM is deliberately NOT rebuilt
-            // on — healthy mics never read exact zeros, but platform NS
-            // hard-gating produces them for minutes on some ROMs, so the two
-            // are indistinguishable here and rebuilding just churned every
-            // few seconds; sustained digital silence withholds capture
-            // progress instead and the service watchdog arbitrates.
-            var zeroFrameStreak = 0
-            var emptyReadStreak = 0
-            var consecutiveRebuilds = 0
+            // Handles owned by this session only; the finally below releases
+            // them on every exit path — normal end, cancellation, exception.
+            var ownedRecord: AudioRecord? = null
+            var aec: EchoCanceller? = null
+            try {
+                val buffer = ShortArray(FRAME_SIZE_SAMPLES)
+                val codec = encoder ?: run {
+                    Log.e(TAG, "Cannot start capture: Opus encoder is not initialized")
+                    setCapturingIfCurrent(generation, false)
+                    return@launch
+                }
+                var record = audioRecord ?: run {
+                    Log.e(TAG, "Cannot start capture: AudioRecord missing")
+                    setCapturingIfCurrent(generation, false)
+                    return@launch
+                }
+                ownedRecord = record
+                // Self-heal bookkeeping. The capture device can die under our
+                // feet — aggressive ROMs invalidate VOICE_COMMUNICATION records
+                // in the background, device switches leave stale handles. Read
+                // errors and repeated empty reads are hard-death fingerprints:
+                // rebuild immediately. All-zero PCM is deliberately NOT rebuilt
+                // on — healthy mics never read exact zeros, but platform NS
+                // hard-gating produces them for minutes on some ROMs, so the two
+                // are indistinguishable here and rebuilding just churned every
+                // few seconds; sustained digital silence withholds capture
+                // progress instead and the service watchdog arbitrates.
+                var zeroFrameStreak = 0
+                var emptyReadStreak = 0
+                var consecutiveRebuilds = 0
 
-            // Software AEC: one engine per capture session, owned by this
-            // coroutine and destroyed in the cleanup below. Creation failure
-            // (old .so without the JNI symbols, OOM) never blocks capture —
-            // the session runs without AEC and the next startCapture retries.
-            val aec = try {
-                EchoCanceller(SAMPLE_RATE, FRAME_SIZE_SAMPLES, AEC_TAIL_SAMPLES).also {
-                    echoReference.reset()
-                    aecRunning = true
-                    echoCancellerRef = it
-                    Log.i(TAG, "Software AEC started (tail=${AEC_TAIL_MS}ms)")
+                // Software AEC: one engine per capture session, owned by this
+                // coroutine and destroyed in the cleanup below. Creation failure
+                // (old .so without the JNI symbols, OOM) never blocks capture —
+                // the session runs without AEC and the next startCapture retries.
+                aec = try {
+                    EchoCanceller(SAMPLE_RATE, FRAME_SIZE_SAMPLES, AEC_TAIL_SAMPLES).also {
+                        echoReference.reset()
+                        aecRunning = true
+                        echoCancellerRef = it
+                        Log.i(TAG, "Software AEC started (tail=${AEC_TAIL_MS}ms)")
+                    }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Software AEC unavailable this session", t)
+                    null
                 }
-            } catch (t: Throwable) {
-                Log.e(TAG, "Software AEC unavailable this session", t)
-                null
-            }
-            val aecFar = ShortArray(FRAME_SIZE_SAMPLES)
-            val aecOut = ShortArray(FRAME_SIZE_SAMPLES)
-            var aecFailStreak = 0
+                val aecFar = ShortArray(FRAME_SIZE_SAMPLES)
+                val aecOut = ShortArray(FRAME_SIZE_SAMPLES)
+                var aecFailStreak = 0
 
-            // Rebuild the capture device from inside the loop. Returns the
-            // fresh record, or null when capture was stopped meanwhile or
-            // the rebuild keeps failing (then the loop ends and the service
-            // watchdog restarts capture later).
-            suspend fun rebuildOrStop(dead: AudioRecord): AudioRecord? {
-                // Release the dead handle first: stopCapture may run during
-                // the backoff below, and it must find a consistent state.
-                // Off-thread with a bounded wait — an inline native stop() hang
-                // would wedge this rebuild path for good.
-                recorderStopper.stopAndRelease(dead)
-                synchronized(captureSwapLock) {
-                    if (audioRecord === dead) audioRecord = null
-                }
-                delay(rebuildBackoffMs(consecutiveRebuilds))
-                if (!_isCapturing.value || !isActive) return null
-                consecutiveRebuilds++
-                val fresh = createAudioRecord() ?: run {
-                    Log.e(TAG, "Capture rebuild failed (attempt $consecutiveRebuilds); ending capture loop")
-                    setCapturing(false)
-                    return null
-                }
-                synchronized(captureSwapLock) {
-                    if (!_isCapturing.value) {
-                        // stopCapture ran while we were building — don't
-                        // orphan a live recorder behind its back
-                        fresh.release()
+                // Rebuild the capture device from inside the loop. Returns the
+                // fresh record, or null when capture was stopped meanwhile or
+                // the rebuild keeps failing (then the loop ends and the service
+                // watchdog restarts capture later).
+                suspend fun rebuildOrStop(dead: AudioRecord): AudioRecord? {
+                    // Release the dead handle first: stopCapture may run during
+                    // the backoff below, and it must find a consistent state.
+                    // Off-thread with a bounded wait — an inline native stop() hang
+                    // would wedge this rebuild path for good.
+                    recorderStopper.stopAndRelease(dead)
+                    synchronized(captureSwapLock) {
+                        if (audioRecord === dead) audioRecord = null
+                    }
+                    delay(rebuildBackoffMs(consecutiveRebuilds))
+                    if (!_isCapturing.value || !isActive) return null
+                    consecutiveRebuilds++
+                    val fresh = createAudioRecord() ?: run {
+                        Log.e(TAG, "Capture rebuild failed (attempt $consecutiveRebuilds); ending capture loop")
+                        setCapturingIfCurrent(generation, false)
                         return null
                     }
-                    audioRecord = fresh
-                }
-                zeroFrameStreak = 0
-                emptyReadStreak = 0
-                lastCaptureProgressAt = SystemClock.elapsedRealtime()
-                Log.i(TAG, "Capture rebuilt (attempt $consecutiveRebuilds)")
-                return fresh
-            }
-
-            while (isActive && _isCapturing.value) {
-                val read = try {
-                    record.read(buffer, 0, FRAME_SIZE_SAMPLES)
-                } catch (e: Throwable) {
-                    Log.e(TAG, "Microphone read failed; attempting capture rebuild", e)
-                    record = rebuildOrStop(record) ?: break
-                    continue
-                }
-                if (read < 0) {
-                    Log.w(TAG, "Microphone read error $read; attempting capture rebuild")
-                    record = rebuildOrStop(record) ?: break
-                    continue
-                }
-                if (read == 0) {
-                    emptyReadStreak++
-                    if (emptyReadStreak >= EMPTY_READ_STREAK_LIMIT) {
-                        Log.w(TAG, "Microphone returned $emptyReadStreak empty reads; attempting capture rebuild")
-                        record = rebuildOrStop(record) ?: break
-                    } else if (emptyReadStreak == EMPTY_READ_STREAK_LIMIT / 2) {
-                        // Early warning: short sessions die before the 30s flush sees anything
-                        Log.w(TAG, "Microphone empty reads at $emptyReadStreak (half of rebuild limit)")
+                    synchronized(captureSwapLock) {
+                        if (!_isCapturing.value) {
+                            // stopCapture ran while we were building — don't
+                            // orphan a live recorder behind its back
+                            fresh.release()
+                            return null
+                        }
+                        audioRecord = fresh
                     }
-                    continue
+                    zeroFrameStreak = 0
+                    emptyReadStreak = 0
+                    lastCaptureProgressAt = SystemClock.elapsedRealtime()
+                    Log.i(TAG, "Capture rebuilt (attempt $consecutiveRebuilds)")
+                    return fresh
                 }
-                emptyReadStreak = 0
-                if (read == FRAME_SIZE_SAMPLES) {
-                    var frameSilent = true
-                    for (s in buffer) {
-                        if (s.toInt() != 0) {
-                            frameSilent = false
+
+                // Adopt a rebuilt recorder as the one this session owns.
+                // Returns false when the loop must end (capture stopped, or
+                // the rebuild kept failing) — rebuildOrStop has already
+                // released the dead handle in that case, so ownership is
+                // dropped by the caller instead of being released twice.
+                suspend fun adoptRebuild(dead: AudioRecord): Boolean {
+                    val fresh = rebuildOrStop(dead) ?: return false
+                    record = fresh
+                    ownedRecord = fresh
+                    return true
+                }
+
+                while (isActive && _isCapturing.value) {
+                    val read = try {
+                        record.read(buffer, 0, FRAME_SIZE_SAMPLES)
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "Microphone read failed; attempting capture rebuild", e)
+                        if (!adoptRebuild(record)) {
+                            ownedRecord = null
                             break
                         }
+                        continue
                     }
-                    if (frameSilent) {
-                        // Digital silence: a healthy mic never reads exact
-                        // zeros (noise floor), but NS-gated silence and a
-                        // dead HAL both do — indistinguishable here, so no
-                        // rebuild. Progress is withheld (below) and the
-                        // service watchdog arbitrates a restart if it lasts.
-                        zeroFrameStreak++
-                        when (zeroFrameStreak) {
-                            ZERO_FRAME_STREAK_LIMIT / 2 -> Log.i(
-                                TAG,
-                                "Digital silence building ($zeroFrameStreak frames) — platform NS gate? no rebuild",
-                            )
-                            ZERO_FRAME_STREAK_LIMIT -> Log.w(
-                                TAG,
-                                "Digital silence sustained ($zeroFrameStreak frames); not rebuilding — watchdog arbitrates if it persists",
-                            )
+                    if (read < 0) {
+                        Log.w(TAG, "Microphone read error $read; attempting capture rebuild")
+                        if (!adoptRebuild(record)) {
+                            ownedRecord = null
+                            break
                         }
+                        continue
+                    }
+                    if (read == 0) {
+                        emptyReadStreak++
+                        if (emptyReadStreak >= EMPTY_READ_STREAK_LIMIT) {
+                            Log.w(TAG, "Microphone returned $emptyReadStreak empty reads; attempting capture rebuild")
+                            if (!adoptRebuild(record)) {
+                                ownedRecord = null
+                                break
+                            }
+                        } else if (emptyReadStreak == EMPTY_READ_STREAK_LIMIT / 2) {
+                            // Early warning: short sessions die before the 30s flush sees anything
+                            Log.w(TAG, "Microphone empty reads at $emptyReadStreak (half of rebuild limit)")
+                        }
+                        continue
+                    }
+                    emptyReadStreak = 0
+                    if (read == FRAME_SIZE_SAMPLES) {
+                        var frameSilent = true
+                        for (s in buffer) {
+                            if (s.toInt() != 0) {
+                                frameSilent = false
+                                break
+                            }
+                        }
+                        if (frameSilent) {
+                            // Digital silence: a healthy mic never reads exact
+                            // zeros (noise floor), but NS-gated silence and a
+                            // dead HAL both do — indistinguishable here, so no
+                            // rebuild. Progress is withheld (below) and the
+                            // service watchdog arbitrates a restart if it lasts.
+                            zeroFrameStreak++
+                            when (zeroFrameStreak) {
+                                ZERO_FRAME_STREAK_LIMIT / 2 -> Log.i(
+                                    TAG,
+                                    "Digital silence building ($zeroFrameStreak frames) — platform NS gate? no rebuild",
+                                )
+                                ZERO_FRAME_STREAK_LIMIT -> Log.w(
+                                    TAG,
+                                    "Digital silence sustained ($zeroFrameStreak frames); not rebuilding — watchdog arbitrates if it persists",
+                                )
+                            }
+                        } else {
+                            zeroFrameStreak = 0
+                            consecutiveRebuilds = 0
+                            // Only non-silent data counts as capture progress:
+                            // NS-gated zeros (or a dead mic) must not keep the
+                            // watchdog satisfied forever
+                            lastCaptureProgressAt = SystemClock.elapsedRealtime()
+                        }
+                        // Software AEC: every full frame on the raw signal, before
+                        // micGain (the filter converges best on raw samples) and
+                        // before the send gate (mute only gates the encoder and
+                        // must not starve the adaptive filter).
+                        if (aec != null) {
+                            echoReference.read(aecFar)
+                            val t0 = System.nanoTime()
+                            try {
+                                aec.process(buffer, aecFar, aecOut)
+                                System.arraycopy(aecOut, 0, buffer, 0, FRAME_SIZE_SAMPLES)
+                                aecFailStreak = 0
+                            } catch (t: Throwable) {
+                                // Bypass on engine error: forward the raw mic — an
+                                // audible echo beats swallowed speech.
+                                if (aecFailStreak++ == 0) Log.e(TAG, "AEC frame bypass: ${t.message}")
+                            }
+                            recordEchoProcUs((System.nanoTime() - t0) / 1000)
+                        }
+                        // ERLE probe observes the post-AEC mic — what actually gets
+                        // transmitted; unaffected by mute (which only gates the
+                        // encoder).
+                        echoProbe.onMicFrame(buffer, System.currentTimeMillis() < farActiveUntil)
                     } else {
-                        zeroFrameStreak = 0
-                        consecutiveRebuilds = 0
-                        // Only non-silent data counts as capture progress:
-                        // NS-gated zeros (or a dead mic) must not keep the
-                        // watchdog satisfied forever
+                        // Partial read (0 < read < frame): still proves the device is alive
                         lastCaptureProgressAt = SystemClock.elapsedRealtime()
                     }
-                    // Software AEC: every full frame on the raw signal, before
-                    // micGain (the filter converges best on raw samples) and
-                    // before the send gate (mute only gates the encoder and
-                    // must not starve the adaptive filter).
-                    if (aec != null) {
-                        echoReference.read(aecFar)
-                        val t0 = System.nanoTime()
-                        try {
-                            aec.process(buffer, aecFar, aecOut)
-                            System.arraycopy(aecOut, 0, buffer, 0, FRAME_SIZE_SAMPLES)
-                            aecFailStreak = 0
-                        } catch (t: Throwable) {
-                            // Bypass on engine error: forward the raw mic — an
-                            // audible echo beats swallowed speech.
-                            if (aecFailStreak++ == 0) Log.e(TAG, "AEC frame bypass: ${t.message}")
+                    if (read == FRAME_SIZE_SAMPLES && !_isMuted.value && micGainFactor != 0f) {
+                        // Mic gain is applied before VAD and encode so "turn it up
+                        // and be heard" behaves uniformly in both mic modes
+                        val gain = micGainFactor
+                        if (gain != 1f) {
+                            for (i in 0 until read) {
+                                buffer[i] = softClip(buffer[i] * gain)
+                            }
                         }
-                        recordEchoProcUs((System.nanoTime() - t0) / 1000)
-                    }
-                    // ERLE probe observes the post-AEC mic — what actually gets
-                    // transmitted; unaffected by mute (which only gates the
-                    // encoder).
-                    echoProbe.onMicFrame(buffer, System.currentTimeMillis() < farActiveUntil)
-                } else {
-                    // Partial read (0 < read < frame): still proves the device is alive
-                    lastCaptureProgressAt = SystemClock.elapsedRealtime()
-                }
-                if (read == FRAME_SIZE_SAMPLES && !_isMuted.value && micGainFactor != 0f) {
-                    // Mic gain is applied before VAD and encode so "turn it up
-                    // and be heard" behaves uniformly in both mic modes
-                    val gain = micGainFactor
-                    if (gain != 1f) {
-                        for (i in 0 until read) {
-                            buffer[i] = softClip(buffer[i] * gain)
-                        }
-                    }
-                    if (micMode == MicMode.VAD) {
-                        // Gate transmission on the voice-activation state machine
-                        vadGate.openThresholdDb = vadThresholdDb
-                        val toSend = vadGate.process(buffer, System.currentTimeMillis())
-                        if (toSend != null) {
-                            for (frame in toSend) {
-                                val encoded = try {
-                                    val t0 = System.nanoTime()
-                                    val out = codec.encode(shortsToBytes(frame))
-                                    recordEncodeUs((System.nanoTime() - t0) / 1000)
-                                    out
-                                } catch (e: Exception) {
-                                    encFailCount++
-                                    Log.w(TAG, "Opus encode failed (frame dropped)", e)
-                                    null
-                                }
-                                if (encoded != null) {
-                                    try {
-                                        tsClient.sendAudio(encoded, CODEC_OPUS_VOICE)
+                        if (micMode == MicMode.VAD) {
+                            // Gate transmission on the voice-activation state machine
+                            vadGate.openThresholdDb = vadThresholdDb
+                            val toSend = vadGate.process(buffer, System.currentTimeMillis())
+                            if (toSend != null) {
+                                for (frame in toSend) {
+                                    val encoded = try {
+                                        val t0 = System.nanoTime()
+                                        val out = codec.encode(shortsToBytes(frame))
+                                        recordEncodeUs((System.nanoTime() - t0) / 1000)
+                                        out
                                     } catch (e: Exception) {
-                                        sendFailCount++
-                                        Log.w(TAG, "sendAudio failed (frame dropped)", e)
+                                        encFailCount++
+                                        Log.w(TAG, "Opus encode failed (frame dropped)", e)
+                                        null
+                                    }
+                                    if (encoded != null) {
+                                        try {
+                                            tsClient.sendAudio(encoded, CODEC_OPUS_VOICE)
+                                        } catch (e: Exception) {
+                                            sendFailCount++
+                                            Log.w(TAG, "sendAudio failed (frame dropped)", e)
+                                        }
                                     }
                                 }
                             }
-                        }
-                        _isLocalVoiceActive.value = vadGate.isActive
-                    } else {
-                        var energy = 0L
-                        for (i in 0 until read) {
-                            energy += buffer[i].toLong() * buffer[i].toLong()
-                        }
-                        val rms = Math.sqrt(energy.toDouble() / read)
-                        val isVoiceActive = rms > 150.0 // Adjusted threshold for voice activity
-                        _isLocalVoiceActive.value = isVoiceActive
+                            _isLocalVoiceActive.value = vadGate.isActive
+                        } else {
+                            var energy = 0L
+                            for (i in 0 until read) {
+                                energy += buffer[i].toLong() * buffer[i].toLong()
+                            }
+                            val rms = Math.sqrt(energy.toDouble() / read)
+                            val isVoiceActive = rms > 150.0 // Adjusted threshold for voice activity
+                            _isLocalVoiceActive.value = isVoiceActive
 
-                        val pcmBytes = shortsToBytes(buffer)
-                        val encoded = try {
-                            val t0 = System.nanoTime()
-                            val out = codec.encode(pcmBytes)
-                            recordEncodeUs((System.nanoTime() - t0) / 1000)
-                            out
-                        } catch (e: Exception) {
-                            encFailCount++
-                            Log.w(TAG, "Opus encode failed (frame dropped)", e)
-                            null
-                        }
-                        if (encoded != null) {
-                            try {
-                                tsClient.sendAudio(encoded, CODEC_OPUS_VOICE)
+                            val pcmBytes = shortsToBytes(buffer)
+                            val encoded = try {
+                                val t0 = System.nanoTime()
+                                val out = codec.encode(pcmBytes)
+                                recordEncodeUs((System.nanoTime() - t0) / 1000)
+                                out
                             } catch (e: Exception) {
-                                sendFailCount++
-                                Log.w(TAG, "sendAudio failed (frame dropped)", e)
+                                encFailCount++
+                                Log.w(TAG, "Opus encode failed (frame dropped)", e)
+                                null
+                            }
+                            if (encoded != null) {
+                                try {
+                                    tsClient.sendAudio(encoded, CODEC_OPUS_VOICE)
+                                } catch (e: Exception) {
+                                    sendFailCount++
+                                    Log.w(TAG, "sendAudio failed (frame dropped)", e)
+                                }
                             }
                         }
+                    } else {
+                        vadGate.reset()
+                        _isLocalVoiceActive.value = false
                     }
-                } else {
-                    vadGate.reset()
-                    _isLocalVoiceActive.value = false
                 }
+            } finally {
+                // Runs on every exit path: normal end, cancellation, or
+                // an exception. Session-wide state is touched only while
+                // this loop still owns the current generation.
+                endCaptureSession(generation, aec, ownedRecord)
             }
-            setCapturing(false)
-            _isLocalVoiceActive.value = false
-            // Stop the reference feed before tearing the engine down; both
-            // are synchronized, so a concurrent playback push can never touch
-            // a destroyed native handle.
-            aecRunning = false
-            try {
-                aec?.close()
-            } catch (_: Throwable) {}
-            echoCancellerRef = null
-            echoReference.reset()
-            // Release only the local handle. The audioRecord field belongs to
-            // startCapture/stopCapture on the caller thread, so this late
-            // cleanup can never clear or double-release a replacement
-            // instance from a quick stop→start cycle.
-            recorderStopper.stopAndRelease(record)
         }
     }
 
