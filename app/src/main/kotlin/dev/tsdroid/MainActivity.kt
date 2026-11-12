@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import dev.tsdroid.data.LanguageCache
 import dev.tsdroid.data.SettingsStore
 import dev.tsdroid.viewmodel.ConnectionViewModel
 import dev.tsdroid.ui.theme.TsDroidTheme
@@ -32,9 +33,16 @@ class MainActivity : ComponentActivity() {
     private val TAG = "MainActivity"
 
     override fun attachBaseContext(newBase: Context) {
-        val languageTag = runBlocking(Dispatchers.IO) {
-            SettingsStore(newBase).language.first()
-        }
+        // Runs before anything else (cold start, rotation, recreate()) and
+        // must not pay a DataStore read every time: the tag is cached for the
+        // process. The first read is bounded and falls back to the default if
+        // DataStore is unavailable or corrupt — throwing from attachBaseContext
+        // would kill the start-up.
+        val languageTag = LanguageCache.get() ?: runCatching {
+            runBlocking(Dispatchers.IO) { SettingsStore(newBase).language.first() }
+        }.onFailure {
+            Log.w("MainActivity", "Reading the language preference failed; using ${LanguageCache.DEFAULT}", it)
+        }.getOrDefault(LanguageCache.DEFAULT).also { LanguageCache.put(it) }
         val locale = java.util.Locale.forLanguageTag(languageTag)
         java.util.Locale.setDefault(locale)
         val config = newBase.resources.configuration

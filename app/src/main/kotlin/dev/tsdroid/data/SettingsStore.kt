@@ -79,6 +79,9 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setLanguage(language: String) {
         context.settingsDataStore.edit { it[KEY_LANGUAGE] = language }
+        // The Activity is recreated right after this; attachBaseContext reads
+        // the cache instead of DataStore, so it has to see the new tag
+        LanguageCache.put(language)
     }
 
     suspend fun setEnableFloatingWindow(enabled: Boolean) {
