@@ -12,6 +12,12 @@ package dev.tsdroid.bridge
  */
 object OpusFrames {
 
+    /** Histogram granularity — every Opus frame duration is a multiple of 2.5 ms. */
+    const val BUCKET_US = 2_500L
+
+    /** Histogram slots covering 0–200 ms; the last slot also collects anything above. */
+    const val BUCKETS = 81
+
     /**
      * Total audio duration of an Opus packet in µs, or null when unparseable
      * (empty, missing code-3 count byte, or a zero/malformed count).
@@ -19,15 +25,29 @@ object OpusFrames {
      * Code 2 (two frames of different configs) is approximated as 2× the
      * first frame's duration — close enough for histogram purposes; exact
      * parsing would require walking the embedded second TOC.
+     *
+     * Runs once per received packet on the native pump thread, so the tables
+     * are spelled out as constants: an `intArrayOf(...)` per call would be an
+     * allocation per frame per speaker in the hottest path there is.
      */
     fun totalDurationUs(packet: ByteArray): Long? {
         if (packet.isEmpty()) return null
         val toc = packet[0].toInt() and 0xFF
         val config = toc shr 3
-        val frameUs = when (config) {
-            in 0..11 -> intArrayOf(10_000, 20_000, 40_000, 60_000)[config % 4] // SILK NB/MB/WB
-            in 12..15 -> intArrayOf(10_000, 20_000)[config % 2]                // Hybrid SWB/FB
-            else -> intArrayOf(2_500, 5_000, 10_000, 20_000)[config % 4]       // CELT NB/FB
+        val frameUs = when {
+            config < 12 -> when (config and 0x3) { // SILK NB/MB/WB
+                0 -> 10_000L
+                1 -> 20_000L
+                2 -> 40_000L
+                else -> 60_000L
+            }
+            config < 16 -> if (config and 0x1 == 0) 10_000L else 20_000L // Hybrid SWB/FB
+            else -> when (config and 0x3) { // CELT NB/WB/SWB/FB
+                0 -> 2_500L
+                1 -> 5_000L
+                2 -> 10_000L
+                else -> 20_000L
+            }
         }
         val frames = when (toc and 0x3) {
             0 -> 1L
@@ -41,4 +61,8 @@ object OpusFrames {
         }
         return frameUs * frames
     }
+
+    /** Histogram slot for [durationUs] at [BUCKET_US] granularity. */
+    fun bucketOf(durationUs: Long): Int =
+        (durationUs / BUCKET_US).toInt().coerceIn(0, BUCKETS - 1)
 }

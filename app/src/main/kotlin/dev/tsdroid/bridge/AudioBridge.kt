@@ -178,8 +178,13 @@ class AudioBridge(
     @Volatile
     private var comfortNoiseFrames = 0
 
-    /** TOC frame-duration histogram this window (key = µs, value = packets). */
-    private val tocDurationCounts = ConcurrentHashMap<Long, Int>()
+    /**
+     * TOC frame-duration histogram this window, one slot per 2.5 ms
+     * ([OpusFrames.bucketOf]). A fixed atomic counter array instead of a
+     * map: this is incremented once per received packet, and a
+     * `HashMap<Long, Int>.merge` boxes a key and a value per frame.
+     */
+    private val tocDurationCounts = java.util.concurrent.atomic.AtomicIntegerArray(OpusFrames.BUCKETS)
     @Volatile
     private var tocUnparseableFrames = 0
 
@@ -1573,7 +1578,7 @@ class AudioBridge(
         if (durationUs == null) {
             tocUnparseableFrames++
         } else {
-            tocDurationCounts.merge(durationUs, 1, Int::plus)
+            tocDurationCounts.incrementAndGet(OpusFrames.bucketOf(durationUs))
         }
         if (userId in mutedUserIds) { discardMutedUser++; return }
         if (_isOutputMuted.value) { discardOutputMuted++; return } // Global output mute — discard incoming audio
@@ -1737,12 +1742,24 @@ class AudioBridge(
             Log.i(TAG, "AudioComfort 30s: shortFrames=$cn (≤${COMFORT_NOISE_FRAME_MAX_BYTES}B, decode-skip pending)")
             comfortNoiseFrames = 0
         }
-        if (tocDurationCounts.isNotEmpty() || tocUnparseableFrames > 0) {
-            val hist = tocDurationCounts.entries.sortedBy { it.key }
-                .joinToString(" ") { "${it.key / 1000.0}ms=${it.value}" }
-            Log.i(TAG, "AudioToc 30s: $hist unparseable=$tocUnparseableFrames")
-            tocDurationCounts.clear()
+        var tocPackets = 0
+        var tocHist: StringBuilder? = null
+        for (i in 0 until OpusFrames.BUCKETS) {
+            val n = tocDurationCounts.getAndSet(i, 0)
+            if (n <= 0) continue
+            tocPackets += n
+            val name = if (i == OpusFrames.BUCKETS - 1) {
+                "≥${i * OpusFrames.BUCKET_US / 1000.0}ms"
+            } else {
+                "${i * OpusFrames.BUCKET_US / 1000.0}ms"
+            }
+            val sb = tocHist ?: StringBuilder().also { tocHist = it }
+            sb.append(name).append('=').append(n).append(' ')
+        }
+        if (tocPackets > 0 || tocUnparseableFrames > 0) {
+            val unparseable = tocUnparseableFrames
             tocUnparseableFrames = 0
+            Log.i(TAG, "AudioToc 30s: ${tocHist?.toString()?.trim().orEmpty()} unparseable=$unparseable")
         }
         val echo = echoProbe.snapshotAndReset()
         val ref = echoReference.snapshotAndReset()

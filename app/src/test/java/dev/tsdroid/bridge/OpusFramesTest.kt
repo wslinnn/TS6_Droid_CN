@@ -2,6 +2,7 @@ package dev.tsdroid.bridge
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OpusFramesTest {
@@ -64,5 +65,31 @@ class OpusFramesTest {
     fun `stereo flag does not change duration`() {
         assertEquals(20_000L, duration(0x08 or 0x04))               // s=1 (stereo), code 0
         assertEquals(40_000L, duration(0x08 or 0x04 or 0x01))       // stereo, code 1 → 2 × 20ms
+    }
+
+    @Test
+    fun `histogram buckets are 2_5 ms wide`() {
+        assertEquals(4, OpusFrames.bucketOf(10_000L))
+        assertEquals(8, OpusFrames.bucketOf(20_000L))
+        assertEquals(1, OpusFrames.bucketOf(2_500L))
+        assertEquals(24, OpusFrames.bucketOf(60_000L))
+        // Sub-bucket durations round down rather than spilling
+        assertEquals(0, OpusFrames.bucketOf(1_000L))
+    }
+
+    @Test
+    fun `histogram clamps absurd durations into the last bucket`() {
+        assertEquals(OpusFrames.BUCKETS - 1, OpusFrames.bucketOf(Long.MAX_VALUE))
+        // The largest legal packet: 63 frames × 60 ms = 3.78 s
+        assertEquals(OpusFrames.BUCKETS - 1, OpusFrames.bucketOf(3_780_000L))
+    }
+
+    @Test
+    fun `every parseable duration has a dedicated bucket`() {
+        // 20 ms frames — the pipeline assumption — must be distinguishable
+        // from anything else the histogram can report
+        val twenty = OpusFrames.bucketOf(20_000L)
+        assertEquals(20_000L, twenty * OpusFrames.BUCKET_US)
+        assertTrue(twenty < OpusFrames.BUCKETS - 1)
     }
 }
