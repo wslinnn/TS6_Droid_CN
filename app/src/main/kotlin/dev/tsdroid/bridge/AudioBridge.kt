@@ -706,6 +706,7 @@ class AudioBridge(
                     }
                     null
                 }
+                val pcmOut = ByteArray(FRAME_SIZE_BYTES)
                 val aecFar = ShortArray(FRAME_SIZE_SAMPLES)
                 val aecOut = ShortArray(FRAME_SIZE_SAMPLES)
                 var aecFailStreak = 0
@@ -929,7 +930,8 @@ class AudioBridge(
                                 for (frame in toSend) {
                                     val encoded = try {
                                         val t0 = System.nanoTime()
-                                        val out = codec.encode(shortsToBytes(frame))
+                                        shortsToBytesInto(frame, pcmOut)
+                                        val out = codec.encode(pcmOut)
                                         recordEncodeUs((System.nanoTime() - t0) / 1000)
                                         out
                                     } catch (e: Exception) {
@@ -957,10 +959,10 @@ class AudioBridge(
                             val isVoiceActive = rms > 150.0 // Adjusted threshold for voice activity
                             _isLocalVoiceActive.value = isVoiceActive
 
-                            val pcmBytes = shortsToBytes(buffer)
+                            shortsToBytesInto(buffer, pcmOut)
                             val encoded = try {
                                 val t0 = System.nanoTime()
-                                val out = codec.encode(pcmBytes)
+                                val out = codec.encode(pcmOut)
                                 recordEncodeUs((System.nanoTime() - t0) / 1000)
                                 out
                             } catch (e: Exception) {
@@ -1362,6 +1364,10 @@ class AudioBridge(
         val mixAcc = IntArray(FRAME_SIZE_SAMPLES)
         val limiter = PeakLimiter()
         val decodeBuffer = ShortArray(FRAME_SIZE_SAMPLES)
+        // Handed straight to AudioTrack.write, so one buffer serves every
+        // frame. (The capture side cannot reuse its PCM this way: sendAudio
+        // queues the call and the native thread reads the array later.)
+        val mixBytes = ByteArray(FRAME_SIZE_BYTES)
         // Frames written vs. frames played by the current track. Owns the
         // 32-bit playback-head unwrapping (a signed read goes negative after
         // ~12.4 h of continuous playback and used to silence the output).
@@ -1557,19 +1563,19 @@ class AudioBridge(
                 val frameGain = outGain * limiter.next(PcmMixer.peak(mixAcc, outGain))
                 PcmMixer.render(mixAcc, mixBuffer, frameGain)
                 val track = synchronized(trackSwapLock) { audioTrack }
-                val bytes = shortsToBytes(mixBuffer)
+                shortsToBytesInto(mixBuffer, mixBytes)
                 val written = try {
-                    track?.write(bytes, 0, bytes.size) ?: -1
+                    track?.write(mixBytes, 0, mixBytes.size) ?: -1
                 } catch (t: IllegalStateException) {
                     // Track released mid-write — drop this frame; the
                     // next iteration re-reads the field
                     Log.w(TAG, "Write hit a released track", t)
                     -1
                 }
-                if (written != bytes.size) {
+                if (written != mixBytes.size) {
                     writeFailCount++
                     if (writeFailCount == 1) {
-                        Log.w(TAG, "AudioTrack.write returned $written of ${bytes.size}")
+                        Log.w(TAG, "AudioTrack.write returned $written of ${mixBytes.size}")
                     }
                     // Repeated failures are the other face of a dead track:
                     // rebuild instead of dropping every frame until reconnect
@@ -1577,13 +1583,13 @@ class AudioBridge(
                     if (stalledStreak >= PLAYBACK_REBUILD_STREAK &&
                         now - lastRebuildAt >= PLAYBACK_REBUILD_MIN_INTERVAL_MS
                     ) {
-                        rebuildTrack("write returned $written of ${bytes.size}")
+                        rebuildTrack("write returned $written of ${mixBytes.size}")
                         continue
                     }
                 } else {
                     stalledStreak = 0
                 }
-                val framesWritten = bytes.size / 2
+                val framesWritten = mixBytes.size / 2
                 depth.onFramesWritten(framesWritten)
                 playbackWritesTotal += framesWritten
                 // AEC reference: exactly the PCM handed to the speaker
@@ -1866,14 +1872,19 @@ class AudioBridge(
         queueDelaySampleCount++
     }
 
-    private fun shortsToBytes(shorts: ShortArray): ByteArray {
-        val n = shorts.size
-        val bytes = ByteArray(n * 2)
-        for (i in 0 until n) {
-            bytes[i * 2] = (shorts[i].toInt() and 0xFF).toByte()
-            bytes[i * 2 + 1] = (shorts[i].toInt() shr 8 and 0xFF).toByte()
+    /**
+     * Little-endian PCM into [out], writing exactly `shorts.size * 2` bytes.
+     * [out] is reused across frames (one per hot path), so any tail past the
+     * written samples is zeroed: it would otherwise be encoded or played as
+     * leftovers from the previous frame.
+     */
+    private fun shortsToBytesInto(shorts: ShortArray, out: ByteArray) {
+        for (i in shorts.indices) {
+            out[i * 2] = (shorts[i].toInt() and 0xFF).toByte()
+            out[i * 2 + 1] = (shorts[i].toInt() shr 8 and 0xFF).toByte()
         }
-        return bytes
+        val written = shorts.size * 2
+        if (written < out.size) java.util.Arrays.fill(out, written, out.size, 0)
     }
 
     private fun bytesToShorts(bytes: ByteArray, out: ShortArray) =
