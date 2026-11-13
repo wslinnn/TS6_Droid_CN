@@ -73,26 +73,33 @@ object UpdateChecker {
             var sha256Url: String? = null
             if (apkAsset != null) {
                 val apkName = apkAsset.optString("name", "")
-                // Prefer the checksum published next to this exact APK; fall
-                // back to any .sha256 asset (hand-renamed releases)
-                var sumAsset: org.json.JSONObject? = null
+                var exactUrl: String? = null
+                val otherChecksums = mutableListOf<String>()
                 for (i in 0 until assets.length()) {
                     val asset = assets.getJSONObject(i)
-                    if (asset.optString("name", "").equals("$apkName.sha256", ignoreCase = true)) {
-                        sumAsset = asset
-                        break
+                    val name = asset.optString("name", "")
+                    if (!name.endsWith(".sha256", ignoreCase = true)) continue
+                    val url = asset.optString("browser_download_url", "")
+                    if (url.isEmpty()) continue
+                    if (name.equals("$apkName.sha256", ignoreCase = true)) {
+                        exactUrl = url
+                    } else {
+                        otherChecksums.add(url)
                     }
                 }
-                if (sumAsset == null) {
-                    for (i in 0 until assets.length()) {
-                        val asset = assets.getJSONObject(i)
-                        if (asset.optString("name", "").endsWith(".sha256", ignoreCase = true)) {
-                            sumAsset = asset
-                            break
-                        }
+                sha256Url = when {
+                    exactUrl != null -> exactUrl
+                    // Hand-renamed release: a single checksum can only belong to
+                    // the one APK. With several candidates we would be guessing,
+                    // and a wrong guess aborts a legitimate update — skip it
+                    // (the installer still verifies the APK signature).
+                    otherChecksums.size == 1 -> otherChecksums.single()
+                    otherChecksums.size > 1 -> {
+                        Log.w(TAG, "Several .sha256 assets and none matches $apkName; skipping checksum verification")
+                        null
                     }
+                    else -> null
                 }
-                sha256Url = sumAsset?.optString("browser_download_url", "")?.takeIf { it.isNotEmpty() }
             }
             if (apkAsset != null) {
                 downloadUrl = apkAsset.optString("browser_download_url", "")
