@@ -107,6 +107,13 @@ class AudioBridge(
         private const val PLAYBACK_RESTART_DELAY_MS = 500L
 
         /**
+         * AudioRecord ring size in 20 ms frames. Buffer capacity is jitter
+         * headroom, not latency: a bigger ring only means the capture loop can
+         * be descheduled for longer before samples are lost.
+         */
+        private const val CAPTURE_BUFFER_FRAMES = 6 // 120 ms
+
+        /**
          * Consecutive stalled frames (write failure, or a track that is no
          * longer PLAYING while we keep writing) before the output track is
          * rebuilt — 5 frames = 100 ms.
@@ -621,6 +628,7 @@ class AudioBridge(
         requestAudioFocus()
 
         captureJob = scope.launch(Dispatchers.IO) {
+            enterAudioThreadPriority("capture")
             // Handles owned by this session only; the finally below releases
             // them on every exit path — normal end, cancellation, exception.
             var ownedRecord: AudioRecord? = null
@@ -741,6 +749,9 @@ class AudioBridge(
                     zeroFrameStreak = 0
                     emptyReadStreak = 0
                     lastCaptureProgressAt = SystemClock.elapsedRealtime()
+                    // The backoff above suspends: this coroutine may resume on
+                    // a different pool thread, which then needs the priority
+                    enterAudioThreadPriority("capture")
                     Log.i(TAG, "Capture rebuilt (attempt $consecutiveRebuilds)")
                     return fresh
                 }
@@ -975,6 +986,7 @@ class AudioBridge(
                 // Runs on every exit path: normal end, cancellation, or
                 // an exception. Session-wide state is touched only while
                 // this loop still owns the current generation.
+                leaveAudioThreadPriority()
                 endCaptureSession(generation, aec, ownedRecord)
             }
         }
@@ -1043,7 +1055,7 @@ class AudioBridge(
                 SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
-                maxOf(minBuf, FRAME_SIZE_BYTES * 4),
+                maxOf(minBuf, FRAME_SIZE_BYTES * CAPTURE_BUFFER_FRAMES),
             )
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to create AudioRecord (source=$sourceId)", e)
@@ -1063,6 +1075,31 @@ class AudioBridge(
             record.release()
             null
         }
+    }
+
+    /**
+     * Raise the calling thread to audio priority: the capture loop runs
+     * AEC3 (AEC + NS) and Opus, the playback loop mixes and decodes — both
+     * must win against background work or the device ring underruns.
+     *
+     * Best effort on purpose. Capture runs on the shared IO pool and can
+     * migrate across a suspension point (a rebuild's backoff), so it
+     * re-asserts this after every rebuild; a failure here must never take
+     * audio down.
+     */
+    private fun enterAudioThreadPriority(what: String) {
+        try {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+        } catch (t: Throwable) {
+            Log.w(TAG, "Could not raise the $what thread to audio priority", t)
+        }
+    }
+
+    /** Hand a pooled thread back at default priority when the loop ends. */
+    private fun leaveAudioThreadPriority() {
+        try {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DEFAULT)
+        } catch (_: Throwable) {}
     }
 
     /** Wait before the Nth consecutive capture rebuild (2s → 30s cap). */
@@ -1280,7 +1317,10 @@ class AudioBridge(
      * Starts the (self-restarting) playback loop. Runs once, at init.
      */
     private fun startPlaybackLoop() {
-        playbackJob = playbackScope.launch { supervisePlayback() }
+        playbackJob = playbackScope.launch {
+            enterAudioThreadPriority("playback")
+            supervisePlayback()
+        }
     }
 
     /**

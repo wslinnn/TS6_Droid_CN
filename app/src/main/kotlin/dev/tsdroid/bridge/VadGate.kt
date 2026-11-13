@@ -41,6 +41,7 @@ enum class MicMode {
  */
 class VadGate(
     private val preRollFrames: Int = DEFAULT_PRE_ROLL_FRAMES,
+    private val frameSamples: Int = DEFAULT_FRAME_SAMPLES,
 ) {
     /** Level (dBFS) above which transmission activates. */
     @Volatile
@@ -50,7 +51,17 @@ class VadGate(
 
     private var active = false
     private var belowSinceMs = -1L
-    private val preRoll = ArrayDeque<ShortArray>()
+
+    /**
+     * Pre-roll ring of **pre-allocated** frames: while the gate is idle the
+     * buffer is rewritten every frame, so copying a fresh array per frame
+     * would be 1.9 kB of garbage per 20 ms in the capture hot path. The slots
+     * handed to the caller on activation are consumed (encoded) before the
+     * next [process] call can overwrite them.
+     */
+    private val preRollRing = Array(preRollFrames.coerceAtLeast(1)) { ShortArray(frameSamples) }
+    private var preRollNext = 0
+    private var preRollCount = 0
 
     /**
      * Feed one frame captured at [nowMs].
@@ -60,19 +71,12 @@ class VadGate(
     fun process(frame: ShortArray, nowMs: Long): List<ShortArray>? {
         val db = rmsDb(frame)
         if (!active) {
-            if (db < openThresholdDb) {
-                preRoll.addLast(frame.copyOf())
-                while (preRoll.size > preRollFrames) preRoll.removeFirst()
-                return null
-            }
+            pushPreRoll(frame)
+            if (db < openThresholdDb) return null
             // Activate: flush the pre-roll so the word onset is not clipped
             active = true
             belowSinceMs = -1L
-            preRoll.addLast(frame.copyOf())
-            while (preRoll.size > preRollFrames) preRoll.removeFirst()
-            val out = preRoll.toList()
-            preRoll.clear()
-            return out
+            return drainPreRoll()
         }
         if (db >= openThresholdDb - HYSTERESIS_DB) {
             belowSinceMs = -1L
@@ -83,15 +87,40 @@ class VadGate(
         // Deactivate; this trailing frame seeds the next pre-roll
         active = false
         belowSinceMs = -1L
-        preRoll.clear()
-        preRoll.addLast(frame.copyOf())
+        preRollCount = 0
+        preRollNext = 0
+        pushPreRoll(frame)
         return null
     }
 
     fun reset() {
         active = false
         belowSinceMs = -1L
-        preRoll.clear()
+        preRollCount = 0
+        preRollNext = 0
+    }
+
+    private fun pushPreRoll(frame: ShortArray) {
+        val slot = preRollRing[preRollNext]
+        val n = minOf(frame.size, slot.size)
+        System.arraycopy(frame, 0, slot, 0, n)
+        if (n < slot.size) java.util.Arrays.fill(slot, n, slot.size, 0.toShort())
+        preRollNext = (preRollNext + 1) % preRollRing.size
+        if (preRollCount < preRollRing.size) preRollCount++
+    }
+
+    /** Oldest-first view of the buffered frames; empties the ring. */
+    private fun drainPreRoll(): List<ShortArray> {
+        if (preRollCount == 0) return emptyList()
+        val out = ArrayList<ShortArray>(preRollCount)
+        var idx = (preRollNext - preRollCount + preRollRing.size) % preRollRing.size
+        repeat(preRollCount) {
+            out.add(preRollRing[idx])
+            idx = (idx + 1) % preRollRing.size
+        }
+        preRollCount = 0
+        preRollNext = 0
+        return out
     }
 
     companion object {
@@ -100,6 +129,9 @@ class VadGate(
         const val HYSTERESIS_DB = 3f
         const val HANGOVER_MS = 400L
         const val DEFAULT_PRE_ROLL_FRAMES = 8 // 160 ms at 20 ms frames
+
+        /** 20 ms at 48 kHz — must match the capture pipeline's frame size. */
+        const val DEFAULT_FRAME_SAMPLES = 960
 
         fun dbToGain(db: Float): Float = 10.0.pow(db / 20.0).toFloat()
 

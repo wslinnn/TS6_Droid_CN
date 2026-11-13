@@ -3,6 +3,7 @@ package dev.tsdroid.bridge
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -100,5 +101,28 @@ class VadGateTest {
         val out = gate.process(frame(3277), 20)
         assertEquals(1, out!!.size)
         assertTrue(gate.isActive)
+    }
+
+    @Test
+    fun `pre-roll slots are recycled instead of reallocated`() {
+        val gate = VadGate(preRollFrames = 2)
+        gate.process(frame(100), 0)
+        val first = gate.process(frame(3277), 20)!!
+        assertEquals(2, first.size)
+
+        // Run past the hangover to deactivate, then arm a new onset
+        gate.process(frame(100), 500)
+        gate.process(frame(100), 1_000) // deactivates, seeds the ring
+        gate.process(frame(100), 1_020)
+        val second = gate.process(frame(3277), 1_040)!!
+
+        assertEquals(2, second.size)
+        // Same two array instances, rotated — the ring is pre-allocated, so
+        // the capture path allocates nothing per idle frame. Callers must
+        // therefore consume the returned frames before the next process().
+        assertSame(first[1], second[0])
+        assertSame(first[0], second[1])
+        assertEquals(100, second[0][0].toInt())
+        assertEquals(3277, second[1][0].toInt())
     }
 }
