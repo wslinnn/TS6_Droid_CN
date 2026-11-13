@@ -214,6 +214,7 @@
     <string name="error_service_start_failed">Impossible de démarrer le service en arrière-plan</string>
     <string name="error_not_connected">Non connecté au serveur</string>
     <string name="download_failed">Échec du téléchargement</string>
+    <string name="upload_failed">Envoi du fichier échoué</string>
 
     <!-- Poke -->
     <string name="channel_poke">Pokes</string>

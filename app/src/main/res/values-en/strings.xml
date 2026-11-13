@@ -213,6 +213,7 @@
     <string name="error_service_start_failed">Failed to start the background service</string>
     <string name="error_not_connected">Not connected to the server</string>
     <string name="download_failed">Download failed</string>
+    <string name="upload_failed">File upload failed</string>
 
     <!-- Poke -->
     <string name="channel_poke">Pokes</string>

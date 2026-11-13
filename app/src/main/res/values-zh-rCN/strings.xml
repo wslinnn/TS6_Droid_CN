@@ -213,6 +213,7 @@
     <string name="error_service_start_failed">后台服务启动失败</string>
     <string name="error_not_connected">未连接到服务器</string>
     <string name="download_failed">下载失败</string>
+    <string name="upload_failed">文件上传失败</string>
 
     <!-- Poke（戳一戳） -->
     <string name="channel_poke">戳一戳</string>

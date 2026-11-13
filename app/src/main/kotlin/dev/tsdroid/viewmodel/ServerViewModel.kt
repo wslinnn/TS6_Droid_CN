@@ -1272,6 +1272,20 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                     _channelMessages.value = _channelMessages.value + msg
                 }
                 scheduleSave()
+            } else {
+                // overwrite=false means the server can legitimately reject the
+                // upload (no browse permission to pick a free name, someone
+                // created the same name in between, a policy denying
+                // overwrite). Without this branch the user tapped send and
+                // nothing happened at all — no bubble, no log, no toast.
+                Log.w(TAG, "uploadAndSendFile: upload rejected (channel=$channelId path=$path)")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        getApplication(),
+                        getApplication<Application>().getString(R.string.upload_failed),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
             }
         }
     }
@@ -1617,6 +1631,15 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             val success = client.uploadFile(channelId, path, data, overwrite = true)
             if (success) {
                 refreshFileListAfterOperation()
+            } else {
+                Log.w(TAG, "uploadFileToChannel: upload rejected (channel=$channelId path=$path)")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        getApplication(),
+                        getApplication<Application>().getString(R.string.upload_failed),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
             }
         }
     }
