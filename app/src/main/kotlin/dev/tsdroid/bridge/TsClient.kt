@@ -315,13 +315,19 @@ class TsClient {
                     ensureActive()
                     try {
                         val c = client ?: break
-                        // Blocking wait in native code: event arrival wakes
-                        // the call instantly (audio hot path), the timeout
-                        // only bounds silence. No polling sleep here.
-                        // NOTE: received voice is pumped here too — the audio
-                        // sink is invoked synchronously from the pump — so this
-                        // budget is a downlink latency bound, not just an
-                        // event-latency one.
+                        // Blocking wait in native code: an arriving item wakes
+                        // the call immediately, the timeout only bounds an
+                        // otherwise idle wait. No polling sleep here.
+                        //
+                        // What this budget does NOT do is delay audio that has
+                        // already arrived: received voice is pumped here too
+                        // (the sink is invoked synchronously from the pump),
+                        // but `wait_events` completes on the first item and
+                        // then only coalesces a 3 ms burst window — so delivery
+                        // is bounded by that, not by the timeout below.
+                        // What it DOES decide: how often this thread wakes
+                        // while idle, and how long a queued `sendAudio` can sit
+                        // behind the wait (uplink jitter when transmitting).
                         val pollMs = when {
                             captureActive -> 5
                             System.currentTimeMillis() - lastEventAt < 2000 -> 15
