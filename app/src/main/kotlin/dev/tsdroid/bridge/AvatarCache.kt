@@ -24,6 +24,15 @@ class AvatarCache(private val cacheDir: File) {
          * cache) recovers without a restart.
          */
         private const val NEGATIVE_TTL_MS = 10 * 60 * 1000L
+
+        /**
+         * Upper bound for decoded avatars. Each one is small, but a busy
+         * server can expose thousands of users over a long session; the
+         * Compose-side map is bounded too, so this closes the loop on the
+         * unbounded-cache problem. The least recently used entry is evicted
+         * and re-read from the on-disk copy on demand.
+         */
+        private const val MAX_MEMORY_ENTRIES = 400
     }
 
     /** Attempt counter + timestamp for the negative cache. */
@@ -34,14 +43,21 @@ class AvatarCache(private val cacheDir: File) {
      * hit the old bitmap in memory or on disk. `|` cannot appear in a decoded
      * uid, so the pair is unambiguous.
      */
-    private val memoryCache = ConcurrentHashMap<String, ImageBitmap>()
+    private val memoryCacheLock = Any()
+    private val memoryCache = object : LinkedHashMap<String, ImageBitmap>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap>): Boolean =
+            size > MAX_MEMORY_ENTRIES
+    }
     private val loading = ConcurrentHashMap<String, Boolean>()
     private val failures = ConcurrentHashMap<String, Failures>()
     private val avatarsDir = File(cacheDir, "avatars").also { it.mkdirs() }
 
     private fun key(uid: String, avatarId: String?): String = "$uid|${avatarId.orEmpty()}"
 
-    fun getAvatar(uid: String, avatarId: String?): ImageBitmap? = memoryCache[key(uid, avatarId)]
+    fun getAvatar(uid: String, avatarId: String?): ImageBitmap? {
+        val k = key(uid, avatarId)
+        return synchronized(memoryCacheLock) { memoryCache[k] }
+    }
 
     fun hasNoAvatar(uid: String, avatarId: String?): Boolean {
         val k = key(uid, avatarId)
@@ -57,7 +73,9 @@ class AvatarCache(private val cacheDir: File) {
     fun clearMemoryCache(vararg uids: String) {
         for (uid in uids) {
             val prefix = "$uid|"
-            memoryCache.keys.forEach { if (it.startsWith(prefix)) memoryCache.remove(it) }
+            synchronized(memoryCacheLock) {
+                memoryCache.keys.filter { it.startsWith(prefix) }.forEach { memoryCache.remove(it) }
+            }
             loading.keys.forEach { if (it.startsWith(prefix)) loading.remove(it) }
             failures.keys.forEach { if (it.startsWith(prefix)) failures.remove(it) }
         }
@@ -66,7 +84,7 @@ class AvatarCache(private val cacheDir: File) {
 
     /** Clear ALL memory caches so next loadAvatar calls re-download */
     fun clearAllMemoryCache() {
-        memoryCache.clear()
+        synchronized(memoryCacheLock) { memoryCache.clear() }
         loading.clear()
         failures.clear()
         Log.d(TAG, "Cleared ALL memory caches")
@@ -92,7 +110,7 @@ class AvatarCache(private val cacheDir: File) {
     suspend fun loadAvatar(uid: String, avatarId: String?, tsClient: TsClient) {
         if (uid.isEmpty()) return
         val k = key(uid, avatarId)
-        if (memoryCache.containsKey(k)) return
+        if (synchronized(memoryCacheLock) { memoryCache.containsKey(k) }) return
         if (hasNoAvatar(uid, avatarId)) return
         if (loading.putIfAbsent(k, true) != null) return
 
@@ -117,7 +135,7 @@ class AvatarCache(private val cacheDir: File) {
                 if (fromDisk && bytes != null) {
                     val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     if (bitmap != null) {
-                        memoryCache[k] = bitmap.asImageBitmap()
+                        synchronized(memoryCacheLock) { memoryCache[k] = bitmap.asImageBitmap() }
                         Log.d(TAG, "Loaded avatar from disk cache for $uid")
                         return@withContext
                     }
@@ -142,7 +160,7 @@ class AvatarCache(private val cacheDir: File) {
                 val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 if (bitmap != null) {
                     diskFile.writeBytes(bytes)
-                    memoryCache[k] = bitmap.asImageBitmap()
+                    synchronized(memoryCacheLock) { memoryCache[k] = bitmap.asImageBitmap() }
                     Log.i(TAG, "Avatar loaded for $uid")
                 } else {
                     Log.w(TAG, "Failed to decode downloaded avatar for $uid (${bytes.size} bytes)")
