@@ -657,15 +657,24 @@ class AudioBridge(
                     return true
                 }
 
+                // Samples already sitting in `buffer` from a short read. A
+                // read that returns fewer than a full frame is a device
+                // hiccup, not a reason to throw the samples away: the frame is
+                // topped up on the next read (and the VAD state survives, so
+                // the onset it was about to transmit is not lost).
+                var carry = 0
+
                 while (isActive && _isCapturing.value) {
+                    val wanted = FRAME_SIZE_SAMPLES - carry
                     val read = try {
-                        record.read(buffer, 0, FRAME_SIZE_SAMPLES)
+                        record.read(buffer, carry, wanted)
                     } catch (e: Throwable) {
                         Log.e(TAG, "Microphone read failed; attempting capture rebuild", e)
                         if (!adoptRebuild(record)) {
                             ownedRecord = null
                             break
                         }
+                        carry = 0
                         continue
                     }
                     if (read < 0) {
@@ -674,6 +683,7 @@ class AudioBridge(
                             ownedRecord = null
                             break
                         }
+                        carry = 0
                         continue
                     }
                     if (read == 0) {
@@ -684,6 +694,7 @@ class AudioBridge(
                                 ownedRecord = null
                                 break
                             }
+                            carry = 0
                         } else if (emptyReadStreak == EMPTY_READ_STREAK_LIMIT / 2) {
                             // Early warning: short sessions die before the 30s flush sees anything
                             Log.w(TAG, "Microphone empty reads at $emptyReadStreak (half of rebuild limit)")
@@ -691,71 +702,74 @@ class AudioBridge(
                         continue
                     }
                     emptyReadStreak = 0
-                    if (read == FRAME_SIZE_SAMPLES) {
-                        var frameSilent = true
-                        for (s in buffer) {
-                            if (s.toInt() != 0) {
-                                frameSilent = false
-                                break
-                            }
+                    if (read < wanted) {
+                        // Partial read: this sample run still proves the
+                        // device is alive, but the frame is not complete yet
+                        carry += read
+                        lastCaptureProgressAt = SystemClock.elapsedRealtime()
+                        continue
+                    }
+                    carry = 0
+                    var frameSilent = true
+                    for (s in buffer) {
+                        if (s.toInt() != 0) {
+                            frameSilent = false
+                            break
                         }
-                        if (frameSilent) {
-                            // Digital silence: a healthy mic never reads exact
-                            // zeros (noise floor), but NS-gated silence and a
-                            // dead HAL both do — indistinguishable here, so no
-                            // rebuild. Progress is withheld (below) and the
-                            // service watchdog arbitrates a restart if it lasts.
-                            zeroFrameStreak++
-                            when (zeroFrameStreak) {
-                                ZERO_FRAME_STREAK_LIMIT / 2 -> Log.i(
-                                    TAG,
-                                    "Digital silence building ($zeroFrameStreak frames) — platform NS gate? no rebuild",
-                                )
-                                ZERO_FRAME_STREAK_LIMIT -> Log.w(
-                                    TAG,
-                                    "Digital silence sustained ($zeroFrameStreak frames); not rebuilding — watchdog arbitrates if it persists",
-                                )
-                            }
-                        } else {
-                            zeroFrameStreak = 0
-                            consecutiveRebuilds = 0
-                            // Only non-silent data counts as capture progress:
-                            // NS-gated zeros (or a dead mic) must not keep the
-                            // watchdog satisfied forever
-                            lastCaptureProgressAt = SystemClock.elapsedRealtime()
+                    }
+                    if (frameSilent) {
+                        // Digital silence: a healthy mic never reads exact
+                        // zeros (noise floor), but NS-gated silence and a
+                        // dead HAL both do — indistinguishable here, so no
+                        // rebuild. Progress is withheld (below) and the
+                        // service watchdog arbitrates a restart if it lasts.
+                        zeroFrameStreak++
+                        when (zeroFrameStreak) {
+                            ZERO_FRAME_STREAK_LIMIT / 2 -> Log.i(
+                                TAG,
+                                "Digital silence building ($zeroFrameStreak frames) — platform NS gate? no rebuild",
+                            )
+                            ZERO_FRAME_STREAK_LIMIT -> Log.w(
+                                TAG,
+                                "Digital silence sustained ($zeroFrameStreak frames); not rebuilding — watchdog arbitrates if it persists",
+                            )
                         }
-                        // Software AEC: every full frame on the raw signal, before
-                        // micGain (the filter converges best on raw samples) and
-                        // before the send gate (mute only gates the encoder and
-                        // must not starve the adaptive filter).
-                        if (aec != null) {
-                            echoReference.read(aecFar)
-                            val t0 = System.nanoTime()
-                            try {
-                                aec.process(buffer, aecFar, aecOut)
-                                System.arraycopy(aecOut, 0, buffer, 0, FRAME_SIZE_SAMPLES)
-                                aecFailStreak = 0
-                            } catch (t: Throwable) {
-                                // Bypass on engine error: forward the raw mic — an
-                                // audible echo beats swallowed speech.
-                                if (aecFailStreak++ == 0) Log.e(TAG, "AEC frame bypass: ${t.message}")
-                            }
-                            recordEchoProcUs((System.nanoTime() - t0) / 1000)
-                        }
-                        // ERLE probe observes the post-AEC mic — what actually gets
-                        // transmitted; unaffected by mute (which only gates the
-                        // encoder).
-                        echoProbe.onMicFrame(buffer, SystemClock.elapsedRealtime() < farActiveUntil)
                     } else {
-                        // Partial read (0 < read < frame): still proves the device is alive
+                        zeroFrameStreak = 0
+                        consecutiveRebuilds = 0
+                        // Only non-silent data counts as capture progress:
+                        // NS-gated zeros (or a dead mic) must not keep the
+                        // watchdog satisfied forever
                         lastCaptureProgressAt = SystemClock.elapsedRealtime()
                     }
-                    if (read == FRAME_SIZE_SAMPLES && !_isMuted.value && micGainFactor != 0f) {
+                    // Software AEC: every full frame on the raw signal, before
+                    // micGain (the filter converges best on raw samples) and
+                    // before the send gate (mute only gates the encoder and
+                    // must not starve the adaptive filter).
+                    if (aec != null) {
+                        echoReference.read(aecFar)
+                        val t0 = System.nanoTime()
+                        try {
+                            aec.process(buffer, aecFar, aecOut)
+                            System.arraycopy(aecOut, 0, buffer, 0, FRAME_SIZE_SAMPLES)
+                            aecFailStreak = 0
+                        } catch (t: Throwable) {
+                            // Bypass on engine error: forward the raw mic — an
+                            // audible echo beats swallowed speech.
+                            if (aecFailStreak++ == 0) Log.e(TAG, "AEC frame bypass: ${t.message}")
+                        }
+                        recordEchoProcUs((System.nanoTime() - t0) / 1000)
+                    }
+                    // ERLE probe observes the post-AEC mic — what actually gets
+                    // transmitted; unaffected by mute (which only gates the
+                    // encoder).
+                    echoProbe.onMicFrame(buffer, SystemClock.elapsedRealtime() < farActiveUntil)
+                    if (!_isMuted.value && micGainFactor != 0f) {
                         // Mic gain is applied before VAD and encode so "turn it up
                         // and be heard" behaves uniformly in both mic modes
                         val gain = micGainFactor
                         if (gain != 1f) {
-                            for (i in 0 until read) {
+                            for (i in 0 until FRAME_SIZE_SAMPLES) {
                                 buffer[i] = softClip(buffer[i] * gain)
                             }
                         }
@@ -788,10 +802,10 @@ class AudioBridge(
                             _isLocalVoiceActive.value = vadGate.isActive
                         } else {
                             var energy = 0L
-                            for (i in 0 until read) {
+                            for (i in 0 until FRAME_SIZE_SAMPLES) {
                                 energy += buffer[i].toLong() * buffer[i].toLong()
                             }
-                            val rms = Math.sqrt(energy.toDouble() / read)
+                            val rms = Math.sqrt(energy.toDouble() / FRAME_SIZE_SAMPLES)
                             val isVoiceActive = rms > 150.0 // Adjusted threshold for voice activity
                             _isLocalVoiceActive.value = isVoiceActive
 
