@@ -20,8 +20,6 @@ import dev.tslib.AudioConfig
 import dev.tslib.EchoCanceller
 import dev.tslib.OpusCodec
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -30,10 +28,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class AudioBridge(
     private val context: Context,
@@ -394,13 +394,39 @@ class AudioBridge(
      */
     private val captureGeneration = java.util.concurrent.atomic.AtomicInteger(0)
 
+    /**
+     * Dedicated single-thread executor for one audio loop, with the thread
+     * raised to audio priority by the factory.
+     *
+     * Not a shared pool on purpose: thread priority is an OS property of the
+     * *thread*, so a coroutine on `Dispatchers.IO` that resumes on a different
+     * pool thread after a suspension leaves the elevated priority behind —
+     * that thread then runs unrelated IO (message persistence, avatar
+     * downloads) at audio priority. A dedicated thread cannot migrate, needs
+     * no re-assertion, and dies with the bridge.
+     */
+    private fun newAudioThread(name: String): ExecutorService =
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread({
+                try {
+                    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+                } catch (_: Throwable) {
+                    // Best effort: audio must work at default priority too
+                }
+                runnable.run()
+            }, name)
+        }
+
+    private val captureExecutor = newAudioThread("TsCapture")
+    private val captureDispatcher = captureExecutor.asCoroutineDispatcher()
+    private val playbackExecutor = newAudioThread("TsPlayback")
+
     // Dedicated single-thread scope for audio playback. The exception handler
     // is the last line of defence: the restart wrapper catches everything the
     // loop throws, but an unexpected failure of the wrapper itself must be
     // logged rather than reaching the process' default uncaught handler.
-    @OptIn(ExperimentalCoroutinesApi::class)
     private val playbackScope = CoroutineScope(
-        SupervisorJob() + Dispatchers.IO.limitedParallelism(1) +
+        SupervisorJob() + playbackExecutor.asCoroutineDispatcher() +
             kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
                 Log.e(TAG, "Playback scope failed", e)
             }
@@ -617,8 +643,7 @@ class AudioBridge(
         lastCaptureProgressAt = SystemClock.elapsedRealtime()
         requestAudioFocus()
 
-        captureJob = scope.launch(Dispatchers.IO) {
-            enterAudioThreadPriority("capture")
+        captureJob = scope.launch(captureDispatcher) {
             // Handles owned by this session only; the finally below releases
             // them on every exit path — normal end, cancellation, exception.
             var ownedRecord: AudioRecord? = null
@@ -740,9 +765,6 @@ class AudioBridge(
                     zeroFrameStreak = 0
                     emptyReadStreak = 0
                     lastCaptureProgressAt = SystemClock.elapsedRealtime()
-                    // The backoff above suspends: this coroutine may resume on
-                    // a different pool thread, which then needs the priority
-                    enterAudioThreadPriority("capture")
                     Log.i(TAG, "Capture rebuilt (attempt $consecutiveRebuilds)")
                     return fresh
                 }
@@ -978,7 +1000,6 @@ class AudioBridge(
                 // Runs on every exit path: normal end, cancellation, or
                 // an exception. Session-wide state is touched only while
                 // this loop still owns the current generation.
-                leaveAudioThreadPriority()
                 endCaptureSession(generation, aec, ownedRecord)
             }
         }
@@ -1067,31 +1088,6 @@ class AudioBridge(
             record.release()
             null
         }
-    }
-
-    /**
-     * Raise the calling thread to audio priority: the capture loop runs
-     * AEC3 (AEC + NS) and Opus, the playback loop mixes and decodes — both
-     * must win against background work or the device ring underruns.
-     *
-     * Best effort on purpose. Capture runs on the shared IO pool and can
-     * migrate across a suspension point (a rebuild's backoff), so it
-     * re-asserts this after every rebuild; a failure here must never take
-     * audio down.
-     */
-    private fun enterAudioThreadPriority(what: String) {
-        try {
-            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
-        } catch (t: Throwable) {
-            Log.w(TAG, "Could not raise the $what thread to audio priority", t)
-        }
-    }
-
-    /** Hand a pooled thread back at default priority when the loop ends. */
-    private fun leaveAudioThreadPriority() {
-        try {
-            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DEFAULT)
-        } catch (_: Throwable) {}
     }
 
     /** Wait before the Nth consecutive capture rebuild (2s → 30s cap). */
@@ -1309,10 +1305,7 @@ class AudioBridge(
      * Starts the (self-restarting) playback loop. Runs once, at init.
      */
     private fun startPlaybackLoop() {
-        playbackJob = playbackScope.launch {
-            enterAudioThreadPriority("playback")
-            supervisePlayback()
-        }
+        playbackJob = playbackScope.launch { supervisePlayback() }
     }
 
     /**
@@ -1670,6 +1663,10 @@ class AudioBridge(
         playbackJob?.cancel()
         playbackJob = null
         playbackScope.cancel()
+        // Dedicated audio threads die with the bridge (a shared pool would
+        // keep a thread at URGENT_AUDIO for unrelated work)
+        captureExecutor.shutdown()
+        playbackExecutor.shutdown()
         audioTrack?.stop()
         audioTrack?.release()
         audioTrack = null
