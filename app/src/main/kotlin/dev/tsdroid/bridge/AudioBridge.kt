@@ -546,6 +546,17 @@ class AudioBridge(
                     }
                 } catch (t: Throwable) {
                     Log.e(TAG, "Software AEC unavailable this session", t)
+                    // This session owns the generation but has no engine. The
+                    // previous session's cleanup deliberately skipped these
+                    // fields (stale generation), so they can still say
+                    // "AEC running" and point at an already closed handle:
+                    // drop the wiring here or the playback loop keeps feeding
+                    // a reference nobody consumes and the 30s diagnostic reads
+                    // a closed handle (reported as -1 forever).
+                    if (captureGeneration.get() == generation) {
+                        aecRunning = false
+                        echoCancellerRef = null
+                    }
                     null
                 }
                 val aecFar = ShortArray(FRAME_SIZE_SAMPLES)
