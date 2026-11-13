@@ -243,9 +243,12 @@ class AudioBridge(
     private var lastEchoZeroedTotal = -1L
 
     /**
-     * Guards [audioRecord]/effect swaps between startCapture/stopCapture
-     * (caller thread) and the capture loop's self-heal rebuilds, so a
-     * rebuild finishing after stopCapture can never orphan a live recorder.
+     * Guards [audioRecord] swaps between startCapture/stopCapture (caller
+     * thread) and the capture loop's self-heal rebuilds, and the atomic
+     * "generation check + session-state write" pairs: startCapture claims the
+     * mic under it, endCaptureSession/setCapturingIfCurrent/AEC wiring only
+     * touch session-wide state while holding it. Never hold it across native
+     * teardown — AudioRecord.stop() can hang and would wedge every restart.
      */
     private val captureSwapLock = Any()
 
@@ -441,9 +444,13 @@ class AudioBridge(
      * [setCapturing] restricted to the capture session that still owns the
      * mic. A recorder whose blocking read returns after a watchdog
      * stop→start cycle must not clear the flag the replacement session set.
+     * The check-and-act runs under [captureSwapLock] so it cannot interleave
+     * with a new session's "bump the generation and claim the mic".
      */
     private fun setCapturingIfCurrent(generation: Int, active: Boolean) {
-        if (captureGeneration.get() == generation) setCapturing(active)
+        synchronized(captureSwapLock) {
+            if (captureGeneration.get() == generation) setCapturing(active)
+        }
     }
 
     /**
@@ -454,17 +461,26 @@ class AudioBridge(
      * watchdog restart), the new session owns `_isCapturing`, the reference
      * feed and the echo canceller, and only this session's own engine and
      * recorder are released here.
+     *
+     * The comparison and the writes happen under [captureSwapLock] — the same
+     * lock [startCapture] takes to bump the generation — so this session
+     * cannot read "still current", get preempted, and then clear the state of
+     * the session that started in between. The native teardown below stays
+     * outside the lock: AudioRecord.stop() can hang (see [RecorderStopper])
+     * and must never hold a lock the capture-restart path needs.
      */
     private fun endCaptureSession(generation: Int, aec: EchoCanceller?, record: AudioRecord?) {
-        if (captureGeneration.get() == generation) {
-            setCapturing(false)
-            _isLocalVoiceActive.value = false
-            // Stop the reference feed before tearing the engine down; both
-            // are synchronized, so a concurrent playback push can never touch
-            // a destroyed native handle.
-            aecRunning = false
-            echoCancellerRef = null
-            echoReference.reset()
+        synchronized(captureSwapLock) {
+            if (captureGeneration.get() == generation) {
+                setCapturing(false)
+                _isLocalVoiceActive.value = false
+                // Stop the reference feed before tearing the engine down; both
+                // are synchronized, so a concurrent playback push can never touch
+                // a destroyed native handle.
+                aecRunning = false
+                echoCancellerRef = null
+                echoReference.reset()
+            }
         }
         try {
             aec?.close()
@@ -487,16 +503,19 @@ class AudioBridge(
         }
 
         val record = createAudioRecord() ?: return
-        // Invalidate the previous session BEFORE touching session-wide state:
-        // a stale loop's finally compares the generation, so as long as its
-        // generation is already outdated it cannot clear the flag this session
-        // is about to set. (The bump stays after createAudioRecord() on
-        // purpose: if the recorder cannot be created we return without
-        // bumping, and the old session's cleanup still owns — and clears —
-        // the AEC wiring.)
-        val generation = captureGeneration.incrementAndGet()
-        audioRecord = record
-        setCapturing(true)
+        // Bump the generation and publish the new session as one atomic step
+        // with respect to a stale session's cleanup (both take
+        // captureSwapLock): the stale loop can no longer read "still current",
+        // be preempted, and then clear the flags set right here. The bump
+        // stays after createAudioRecord() on purpose — if the recorder cannot
+        // be created we return without bumping, so the old session's cleanup
+        // still owns and clears the AEC wiring.
+        val generation = synchronized(captureSwapLock) {
+            val g = captureGeneration.incrementAndGet()
+            audioRecord = record
+            setCapturing(true)
+            g
+        }
         captureScope = scope
         lastCaptureProgressAt = SystemClock.elapsedRealtime()
         requestAudioFocus()
@@ -538,11 +557,31 @@ class AudioBridge(
                 // (old .so without the JNI symbols, OOM) never blocks capture —
                 // the session runs without AEC and the next startCapture retries.
                 aec = try {
-                    EchoCanceller(SAMPLE_RATE, FRAME_SIZE_SAMPLES, AEC_TAIL_SAMPLES).also {
-                        echoReference.reset()
-                        aecRunning = true
-                        echoCancellerRef = it
+                    val engine = EchoCanceller(SAMPLE_RATE, FRAME_SIZE_SAMPLES, AEC_TAIL_SAMPLES)
+                    // Wire the reference feed only while this session still
+                    // owns the mic. A start that was delayed past a newer
+                    // session must not steal its wiring: this session's own
+                    // cleanup skips these fields (stale generation), so the
+                    // handle would dangle.
+                    val owned = synchronized(captureSwapLock) {
+                        if (captureGeneration.get() != generation) {
+                            false
+                        } else {
+                            echoReference.reset()
+                            aecRunning = true
+                            echoCancellerRef = engine
+                            true
+                        }
+                    }
+                    if (owned) {
                         Log.i(TAG, "Software AEC started (tail=${AEC_TAIL_MS}ms)")
+                        engine
+                    } else {
+                        Log.w(TAG, "Software AEC discarded: capture session was replaced during start")
+                        try {
+                            engine.close()
+                        } catch (_: Throwable) {}
+                        null
                     }
                 } catch (t: Throwable) {
                     Log.e(TAG, "Software AEC unavailable this session", t)
@@ -553,9 +592,11 @@ class AudioBridge(
                     // drop the wiring here or the playback loop keeps feeding
                     // a reference nobody consumes and the 30s diagnostic reads
                     // a closed handle (reported as -1 forever).
-                    if (captureGeneration.get() == generation) {
-                        aecRunning = false
-                        echoCancellerRef = null
+                    synchronized(captureSwapLock) {
+                        if (captureGeneration.get() == generation) {
+                            aecRunning = false
+                            echoCancellerRef = null
+                        }
                     }
                     null
                 }
@@ -577,7 +618,7 @@ class AudioBridge(
                         if (audioRecord === dead) audioRecord = null
                     }
                     delay(rebuildBackoffMs(consecutiveRebuilds))
-                    if (!_isCapturing.value || !isActive) return null
+                    if (captureGeneration.get() != generation || !_isCapturing.value || !isActive) return null
                     consecutiveRebuilds++
                     val fresh = createAudioRecord() ?: run {
                         Log.e(TAG, "Capture rebuild failed (attempt $consecutiveRebuilds); ending capture loop")
@@ -585,9 +626,11 @@ class AudioBridge(
                         return null
                     }
                     synchronized(captureSwapLock) {
-                        if (!_isCapturing.value) {
-                            // stopCapture ran while we were building — don't
-                            // orphan a live recorder behind its back
+                        // Capture stopped, or a newer session owns the mic by
+                        // now: don't orphan a live recorder behind its back
+                        // (a stale session must never overwrite the field the
+                        // new session just published)
+                        if (!_isCapturing.value || captureGeneration.get() != generation) {
                             fresh.release()
                             return null
                         }
