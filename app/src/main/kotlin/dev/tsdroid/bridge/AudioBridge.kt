@@ -1123,9 +1123,10 @@ class AudioBridge(
         val mixAcc = IntArray(FRAME_SIZE_SAMPLES)
         val limiter = PeakLimiter()
         val decodeBuffer = ShortArray(FRAME_SIZE_SAMPLES)
-        // Total PCM frames handed to AudioTrack — compared against
-        // playbackHeadPosition to measure the track's buffered depth.
-        var writtenFrames = 0L
+        // Frames written vs. frames played by the current track. Owns the
+        // 32-bit playback-head unwrapping (a signed read goes negative after
+        // ~12.4 h of continuous playback and used to silence the output).
+        val depth = PlaybackDepth()
         var currentTrack: AudioTrack? = null
 
         // Sum one decoded frame into the mix accumulator with per-user gain
@@ -1156,15 +1157,14 @@ class AudioBridge(
             val trackNow = synchronized(trackSwapLock) { audioTrack }
             if (trackNow !== currentTrack) {
                 currentTrack = trackNow
-                writtenFrames = 0L
+                depth.reset()
             }
             if (trackNow == null) {
                 // Track released — nothing to write into
                 playbackWake.poll(10, java.util.concurrent.TimeUnit.MILLISECONDS)
                 continue
             }
-            val head = trackNow.playbackHeadPosition.toLong()
-            val bufferedMs = (writtenFrames - head) * 1000 / SAMPLE_RATE
+            val bufferedMs = depth.bufferedMs(trackNow.playbackHeadPosition)
             if (bufferedMs > trackBufPeakMs) trackBufPeakMs = bufferedMs
 
             if (bufferedMs > TARGET_TRACK_BUFFER_MS) {
@@ -1277,7 +1277,7 @@ class AudioBridge(
                     }
                 }
                 val framesWritten = bytes.size / 2
-                writtenFrames += framesWritten
+                depth.onFramesWritten(framesWritten)
                 playbackWritesTotal += framesWritten
                 // AEC reference: exactly the PCM handed to the speaker
                 // (post-gain, post-duck, post-limiter) — feeding the raw
@@ -1453,7 +1453,9 @@ class AudioBridge(
         // not in the mix pipeline — surface every field instead of guessing
         run {
             val outTrack = audioTrack
-            val head = outTrack?.playbackHeadPosition?.toLong() ?: -1L
+            // Unsigned on purpose: the raw counter goes negative after
+            // ~12.4 h and a negative head in the log hides the wrap
+            val head = outTrack?.playbackHeadPosition?.toLong()?.and(0xFFFF_FFFFL) ?: -1L
             val playState = outTrack?.playState ?: -1
             // Actual playback route (not our intent)
             val trackRouteType = try {
