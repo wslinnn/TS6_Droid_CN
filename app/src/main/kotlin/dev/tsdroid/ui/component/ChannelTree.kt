@@ -21,6 +21,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,13 +58,21 @@ fun ChannelTree(
     // Filter nulls early — JNI arrays can contain null elements
     @Suppress("USELESS_CAST")
     val safeUsers = remember(users) { users.filterNotNull() }
-    val treeItems = remember(channels, safeUsers) {
-        val items = buildTreeItems(channels, safeUsers)
-        Log.d("ChannelTree", "Built ${items.size} tree items (${items.count { it is TreeItem.ChannelNode }} channels, ${items.count { it is TreeItem.UserNode }} users) from ${channels.size} channels, ${safeUsers.size} users")
-        items
-    }
+    val treeItems = remember(channels, safeUsers) { buildTreeItems(channels, safeUsers) }
     val userCountByChannel = remember(safeUsers) {
         safeUsers.groupingBy { it.channelId }.eachCount()
+    }
+    // Shape diagnostics only when the shape changes: the remember blocks above
+    // re-run on every talk-status flip, and counting nodes plus building this
+    // line on each one was pure overhead in the busiest channels
+    LaunchedEffect(treeItems.size) {
+        Log.d(
+            "ChannelTree",
+            "Built ${treeItems.size} tree items " +
+                "(${treeItems.count { it is TreeItem.ChannelNode }} channels, " +
+                "${treeItems.count { it is TreeItem.UserNode }} users) from " +
+                "${channels.size} channels, ${safeUsers.size} users",
+        )
     }
 
     LazyColumn(modifier = modifier) {
@@ -206,8 +215,6 @@ private fun buildTreeItems(channels: List<Channel>, users: List<User>): List<Tre
 
     val tree = JChannelTree.fromChannels(safeChannels.toTypedArray())
     val usersByChannel = safeUsers.groupBy { it.channelId }
-
-    Log.d("ChannelTree", "usersByChannel keys: ${usersByChannel.keys}, channel ids: ${safeChannels.map { it.id }}")
 
     val items = mutableListOf<TreeItem>()
 

@@ -490,11 +490,21 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             viewModelScope.launch {
-                service.tsClient.users.collect {
-                    _rawUsers.value = it
-                    loadAvatars(it)
-                    syncUserAudio(it)
-                    mergeLegacyConversations(it)
+                // `User.equals` includes the talk flag, so this flow emits on
+                // every talk start/stop — several times a second in a busy
+                // channel. Only roster changes need the avatar, per-user audio
+                // and legacy-merge passes below; the speaking indicator is
+                // carried by the patched list downstream.
+                var lastRoster: Long? = null
+                service.tsClient.users.collect { users ->
+                    _rawUsers.value = users
+                    val roster = rosterSignature(users)
+                    if (roster != lastRoster) {
+                        lastRoster = roster
+                        loadAvatars(users)
+                        syncUserAudio(users)
+                        mergeLegacyConversations(users)
+                    }
                     applyChannelAudioProfile()
                 }
             }
@@ -623,6 +633,14 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             _channelIcons.value = boundMap(_channelIcons.value + cached, MAX_CHANNEL_ICON_CACHE)
         }
     }
+
+    /**
+     * Cheap identity of a roster: per user the client id, permanent uid,
+     * channel and avatar id — everything the gated passes below react to.
+     * A 64-bit mix is enough: a collision would only delay an avatar or
+     * volume refresh until the next real roster change.
+     */
+    private fun rosterSignature(users: List<User>): Long = rosterSignatureOf(users)
 
     private fun loadAvatars(users: List<User>) {
         val client = tsClient ?: return
@@ -1776,3 +1794,20 @@ private fun User.withTalking(talking: Boolean): User = User(
     platform, version, country, description, avatarId, iconId,
     createdAt, lastConnectedAt,
 )
+
+/**
+ * Roster identity used to gate the per-emission side work (avatars, per-user
+ * audio, legacy conversation merge). Deliberately excludes the volatile
+ * fields — `isTalking` above all: the users flow re-emits on every talk
+ * start/stop, and none of the gated work depends on who is speaking.
+ */
+internal fun rosterSignatureOf(users: List<User>): Long {
+    var h = users.size.toLong()
+    for (user in users) {
+        h = h * 31 + user.id
+        h = h * 31 + (user.uid?.hashCode() ?: 0)
+        h = h * 31 + user.channelId
+        h = h * 31 + (user.avatarId?.hashCode() ?: 0)
+    }
+    return h
+}
