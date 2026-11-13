@@ -16,6 +16,8 @@ data class UpdateInfo(
     val changelog: String,
     val downloadUrl: String,
     val apkSize: Long,
+    /** Release `<apk>.sha256` asset; null on older releases that lack one. */
+    val sha256Url: String? = null,
 )
 
 data class CheckResult(
@@ -58,8 +60,8 @@ object UpdateChecker {
             val assets = obj.getJSONArray("assets")
             val downloadUrl: String
             val apkSize: Long
-            // Pick the .apk asset explicitly — a release can also carry
-            // checksums or other files alongside the APK
+            // Pick the .apk asset explicitly — a release also carries the
+            // "<apk>.sha256" checksum file
             var apkAsset: org.json.JSONObject? = null
             for (i in 0 until assets.length()) {
                 val asset = assets.getJSONObject(i)
@@ -67,6 +69,30 @@ object UpdateChecker {
                     apkAsset = asset
                     break
                 }
+            }
+            var sha256Url: String? = null
+            if (apkAsset != null) {
+                val apkName = apkAsset.optString("name", "")
+                // Prefer the checksum published next to this exact APK; fall
+                // back to any .sha256 asset (hand-renamed releases)
+                var sumAsset: org.json.JSONObject? = null
+                for (i in 0 until assets.length()) {
+                    val asset = assets.getJSONObject(i)
+                    if (asset.optString("name", "").equals("$apkName.sha256", ignoreCase = true)) {
+                        sumAsset = asset
+                        break
+                    }
+                }
+                if (sumAsset == null) {
+                    for (i in 0 until assets.length()) {
+                        val asset = assets.getJSONObject(i)
+                        if (asset.optString("name", "").endsWith(".sha256", ignoreCase = true)) {
+                            sumAsset = asset
+                            break
+                        }
+                    }
+                }
+                sha256Url = sumAsset?.optString("browser_download_url", "")?.takeIf { it.isNotEmpty() }
             }
             if (apkAsset != null) {
                 downloadUrl = apkAsset.optString("browser_download_url", "")
@@ -84,6 +110,7 @@ object UpdateChecker {
                     changelog = body,
                     downloadUrl = downloadUrl,
                     apkSize = apkSize,
+                    sha256Url = sha256Url,
                 ),
                 error = null,
             )
