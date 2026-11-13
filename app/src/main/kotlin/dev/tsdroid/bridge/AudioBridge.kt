@@ -114,16 +114,6 @@ class AudioBridge(
         private const val CAPTURE_BUFFER_FRAMES = 6 // 120 ms
 
         /**
-         * Consecutive stalled frames (write failure, or a track that is no
-         * longer PLAYING while we keep writing) before the output track is
-         * rebuilt — 5 frames = 100 ms.
-         */
-        private const val PLAYBACK_REBUILD_STREAK = 5
-
-        /** Minimum spacing between automatic output-track rebuilds. */
-        private const val PLAYBACK_REBUILD_MIN_INTERVAL_MS = 2_000L
-
-        /**
          * How often the capture loop polls the AEC blow-up-guard counter.
          * Well under the 30 s diagnostics window, so the reported delta
          * covers the whole window at a few seconds' resolution.
@@ -1373,18 +1363,16 @@ class AudioBridge(
         // ~12.4 h of continuous playback and used to silence the output).
         val depth = PlaybackDepth()
         var currentTrack: AudioTrack? = null
-        // Consecutive frames the track could not take audio, and the last
-        // time an automatic rebuild happened (churn guard)
-        var stalledStreak = 0
-        var lastRebuildAt = 0L
+        // Rebuild trigger: write stalls and play-state stalls are counted
+        // separately on purpose (see TrackHealth)
+        val health = TrackHealth()
 
         /**
          * Replace a track the current one can no longer play through.
          * Everything that measured the old timeline is restarted with it.
          */
         fun rebuildTrack(reason: String) {
-            lastRebuildAt = SystemClock.elapsedRealtime()
-            stalledStreak = 0
+            health.onRebuildAttempt(SystemClock.elapsedRealtime())
             if (replaceAudioTrack(reason) != null) {
                 // The new track has its own head counter and route delay
                 currentTrack = null
@@ -1439,18 +1427,11 @@ class AudioBridge(
             // Self-heal: a track that stopped playing (removed device, HAL
             // reset, focus interaction) stays silent forever because writes
             // into it still succeed — only playState reports it
-            if (trackNow.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                stalledStreak++
-                if (stalledStreak >= PLAYBACK_REBUILD_STREAK &&
-                    now - lastRebuildAt >= PLAYBACK_REBUILD_MIN_INTERVAL_MS
-                ) {
-                    rebuildTrack("playState=${trackNow.playState}")
-                    trackNow = synchronized(trackSwapLock) { audioTrack } ?: continue
-                    currentTrack = trackNow
-                    depth.reset()
-                }
-            } else {
-                stalledStreak = 0
+            if (health.onPlayState(trackNow.playState == AudioTrack.PLAYSTATE_PLAYING, now)) {
+                rebuildTrack("playState=${trackNow.playState}")
+                trackNow = synchronized(trackSwapLock) { audioTrack } ?: continue
+                currentTrack = trackNow
+                depth.reset()
             }
             val bufferedMs = depth.bufferedMs(trackNow.playbackHeadPosition)
             if (bufferedMs > trackBufPeakMs) trackBufPeakMs = bufferedMs
@@ -1572,22 +1553,19 @@ class AudioBridge(
                     Log.w(TAG, "Write hit a released track", t)
                     -1
                 }
-                if (written != mixBytes.size) {
+                val writeStalled = written != mixBytes.size
+                val rebuildDue = health.onWrite(written, mixBytes.size, now)
+                if (writeStalled) {
                     writeFailCount++
                     if (writeFailCount == 1) {
                         Log.w(TAG, "AudioTrack.write returned $written of ${mixBytes.size}")
                     }
                     // Repeated failures are the other face of a dead track:
                     // rebuild instead of dropping every frame until reconnect
-                    stalledStreak++
-                    if (stalledStreak >= PLAYBACK_REBUILD_STREAK &&
-                        now - lastRebuildAt >= PLAYBACK_REBUILD_MIN_INTERVAL_MS
-                    ) {
+                    if (rebuildDue) {
                         rebuildTrack("write returned $written of ${mixBytes.size}")
                         continue
                     }
-                } else {
-                    stalledStreak = 0
                 }
                 val framesWritten = mixBytes.size / 2
                 depth.onFramesWritten(framesWritten)
