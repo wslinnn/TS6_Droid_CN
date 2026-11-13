@@ -54,6 +54,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -506,6 +507,17 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                         mergeLegacyConversations(users)
                     }
                     applyChannelAudioProfile()
+                }
+            }
+            viewModelScope.launch {
+                // The roster gate above only rescans on roster changes, but a
+                // failed avatar download is cached negatively for a TTL: without
+                // this timer that expiry is never observed and the picture stays
+                // blank until someone happens to join or leave.
+                while (isActive) {
+                    delay(AvatarCache.NEGATIVE_TTL_MS)
+                    val users = _rawUsers.value
+                    if (users.isNotEmpty()) loadAvatars(users)
                 }
             }
             viewModelScope.launch {

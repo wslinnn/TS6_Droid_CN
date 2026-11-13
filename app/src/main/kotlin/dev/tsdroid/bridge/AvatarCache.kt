@@ -21,9 +21,11 @@ class AvatarCache(private val cacheDir: File) {
          * How long a negative result is trusted. A user whose avatar download
          * failed during a network blip used to stay blank for the rest of the
          * process; retrying after a while (and after a reconnect clears the
-         * cache) recovers without a restart.
+         * cache) recovers without a restart. Also the retry interval the
+         * view-model rescans at — its roster gate only re-scans on roster
+         * changes, so the expiry needs a timer to be observed.
          */
-        private const val NEGATIVE_TTL_MS = 10 * 60 * 1000L
+        internal const val NEGATIVE_TTL_MS = 10 * 60 * 1000L
 
         /**
          * Upper bound for decoded avatars. Each one is small, but a busy
