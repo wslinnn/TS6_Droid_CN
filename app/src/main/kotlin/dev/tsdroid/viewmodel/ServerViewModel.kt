@@ -1734,6 +1734,10 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         saveNow()
+        // The last write must land before a new instance loads the same file:
+        // onCleared is the final chance, so wait for the queue to drain
+        // (bounded — the payload is one small local file)
+        messageStore.flushBlocking()
         clearImageCaches()
         bound = false
         tsClient = null

@@ -10,12 +10,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 class MessageStore(private val context: Context) {
 
     companion object {
         private const val TAG = "MessageStore"
         private const val MAX_MESSAGES = 500
+        /** Upper bound for the teardown flush; the file itself is tiny. */
+        private const val FLUSH_TIMEOUT_MS = 1_000L
     }
 
     private val messagesDir = File(context.filesDir, "messages")
@@ -27,7 +32,8 @@ class MessageStore(private val context: Context) {
      * serializes the writes, so the last save always wins.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val saveScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
+    private val saveDispatcher = Dispatchers.IO.limitedParallelism(1)
+    private val saveScope = CoroutineScope(SupervisorJob() + saveDispatcher)
 
     /** Persisted chat history plus the unread counters that go with it.
      *  Private conversations are keyed by peer uid (or synthetic "clid:<n>"). */
@@ -52,6 +58,10 @@ class MessageStore(private val context: Context) {
     /**
      * Queues a save. The caller's lists are immutable snapshots, so they can
      * be serialized off-thread; this returns immediately.
+     *
+     * Durability is at-most-once: a save is lost if the process dies before
+     * the queued task runs. [flushBlocking] exists for the teardown path that
+     * cannot tolerate that.
      */
     fun save(
         serverAddress: String,
@@ -67,6 +77,24 @@ class MessageStore(private val context: Context) {
                 fileFor(serverAddress).writeText(json)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save messages for $serverAddress", e)
+            }
+        }
+    }
+
+    /**
+     * Waits (bounded by [FLUSH_TIMEOUT_MS]) until every save queued before
+     * this call has hit the disk.
+     *
+     * Only for teardown: after the ViewModel is destroyed a still-queued write
+     * would race the next instance's load of the same file. Everything else
+     * stays fire-and-forget.
+     */
+    fun flushBlocking() {
+        runBlocking {
+            withTimeoutOrNull(FLUSH_TIMEOUT_MS) {
+                // Barrier: scheduled on the single save thread, so it runs
+                // after every save submitted before it
+                withContext(saveDispatcher) { }
             }
         }
     }
