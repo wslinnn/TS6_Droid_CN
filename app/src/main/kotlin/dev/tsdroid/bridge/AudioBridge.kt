@@ -487,13 +487,20 @@ class AudioBridge(
         }
 
         val record = createAudioRecord() ?: return
+        // Invalidate the previous session BEFORE touching session-wide state:
+        // a stale loop's finally compares the generation, so as long as its
+        // generation is already outdated it cannot clear the flag this session
+        // is about to set. (The bump stays after createAudioRecord() on
+        // purpose: if the recorder cannot be created we return without
+        // bumping, and the old session's cleanup still owns — and clears —
+        // the AEC wiring.)
+        val generation = captureGeneration.incrementAndGet()
         audioRecord = record
         setCapturing(true)
         captureScope = scope
         lastCaptureProgressAt = SystemClock.elapsedRealtime()
         requestAudioFocus()
 
-        val generation = captureGeneration.incrementAndGet()
         captureJob = scope.launch(Dispatchers.IO) {
             // Handles owned by this session only; the finally below releases
             // them on every exit path — normal end, cancellation, exception.
