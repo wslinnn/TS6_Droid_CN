@@ -135,6 +135,22 @@ fun ServerScreen(
 ) {
     val channels by viewModel.channels.collectAsStateWithLifecycle()
     val users by viewModel.users.collectAsStateWithLifecycle()
+    // Index lookups: the roster re-emits on every talk-status flip, and each of
+    // the per-recomposition `users.find` calls below would otherwise scan the
+    // whole roster (200 users on a busy server) several times a second
+    val usersById = remember(users) { users.associateBy { it.id } }
+    val usersByUid = remember(users) {
+        val indexed = HashMap<String, User>(users.size)
+        for (user in users) {
+            val uid = user.uid
+            if (!uid.isNullOrEmpty()) indexed[uid] = user
+        }
+        indexed
+    }
+    val treeUsers = remember(users, viewModel.myClientId) {
+        val myId = viewModel.myClientId
+        if (myId == null) users else users.filter { it.id != myId }
+    }
     val channelIcons by viewModel.channelIcons.collectAsStateWithLifecycle()
     val userAvatars by viewModel.avatars.collectAsStateWithLifecycle()
     val serverInfo by viewModel.serverInfo.collectAsStateWithLifecycle()
@@ -192,9 +208,9 @@ fun ServerScreen(
         privateMessages[key]?.lastOrNull { !it.isMe }?.sender
             ?: when {
                 key.startsWith("clid:") -> key.removePrefix("clid:").toIntOrNull()
-                    ?.let { cid -> users.find { it.id == cid }?.nickname }
+                    ?.let { cid -> usersById[cid]?.nickname }
                     ?: context.getString(R.string.user_fallback, key.removePrefix("clid:").toIntOrNull() ?: 0)
-                else -> users.find { it.uid == key }?.nickname
+                else -> usersByUid[key]?.nickname
                     ?: key.take(8) + "…"
             }
     }
@@ -205,11 +221,11 @@ fun ServerScreen(
             val lastIncoming = privateMessages[key]?.lastOrNull { !it.isMe }?.sender
             val name = when {
                 !key.startsWith("clid:") ->
-                    users.find { it.uid == key }?.nickname
+                    usersByUid[key]?.nickname
                         ?: lastIncoming
                         ?: key.take(8) + "…"
                 else -> key.removePrefix("clid:").toIntOrNull()
-                    ?.let { cid -> users.find { it.id == cid }?.nickname }
+                    ?.let { cid -> usersById[cid]?.nickname }
                     ?: lastIncoming
                     ?: context.getString(R.string.user_fallback, key.removePrefix("clid:").toIntOrNull() ?: 0)
             }
@@ -584,7 +600,7 @@ fun ServerScreen(
                         currentPath = currentFilePath,
                         files = fileList,
                         isLoading = fileManagerLoading,
-                        users = users.filter { it.id != viewModel.myClientId },
+                        users = treeUsers,
                         permissionHints = channelPermissions.hints,
                         permissionHintsKnown = channelPermissions.known,
                         onNavigateToFolder = { viewModel.navigateToFolder(it) },
@@ -697,7 +713,7 @@ fun ServerScreen(
     }
 
     // Per-user panel (volume / mute / info) — long-press a user row
-    val panelUser = users.find { it.id == userPanelUserId }
+    val panelUser = usersById[userPanelUserId]
     UserPanelSheet(
         user = panelUser,
         avatar = panelUser?.uid?.let { userAvatars[it] },
@@ -709,7 +725,7 @@ fun ServerScreen(
         onPrivateMessage = {
             val id = userPanelUserId
             if (id != null) {
-                val user = users.find { it.id == id }
+                val user = usersById[id]
                 if (user != null) {
                     pmTargetKey = viewModel.conversationKeyFor(user)
                     chatTab = 1
@@ -727,7 +743,7 @@ fun ServerScreen(
 
     // Poke prompt — optional message, sent to the user's current client id
     pokeTargetUserId?.let { targetId ->
-        val targetName = users.find { it.id == targetId }?.nickname ?: ""
+        val targetName = usersById[targetId]?.nickname ?: ""
         var pokeMessage by remember(targetId) { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { pokeTargetUserId = null },
