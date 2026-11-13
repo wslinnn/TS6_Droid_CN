@@ -52,6 +52,14 @@ class TsClient {
 
         /** State refresh cadence when no events arrive to trigger it. */
         private const val STATE_REFRESH_INTERVAL_MS = 500L
+
+        /**
+         * Idle fallback refresh cadence. Real changes are event-driven (the
+         * native view carries a revision), so this only catches a state change
+         * that reached Java without a view event — it does not need to run at
+         * the event cadence.
+         */
+        private const val STATE_FALLBACK_REFRESH_MS = 2_000L
     }
 
     @Volatile
@@ -296,6 +304,13 @@ class TsClient {
                 var lastEventAt = 0L
                 var lastServerVarsAt = 0L
                 var lastRefreshAt = 0L
+                // Native view revision the current Java-side snapshot was
+                // built from, and the newest one an event announced.
+                var appliedRevision: Long? = null
+                var pendingRevision: Long? = null
+                // Whether this native library reports revisions at all (see
+                // the fallback in the refresh decision below)
+                var revisionsReported = false
                 while (isActive && client != null) {
                     ensureActive()
                     try {
@@ -303,6 +318,10 @@ class TsClient {
                         // Blocking wait in native code: event arrival wakes
                         // the call instantly (audio hot path), the timeout
                         // only bounds silence. No polling sleep here.
+                        // NOTE: received voice is pumped here too — the audio
+                        // sink is invoked synchronously from the pump — so this
+                        // budget is a downlink latency bound, not just an
+                        // event-latency one.
                         val pollMs = when {
                             captureActive -> 5
                             System.currentTimeMillis() - lastEventAt < 2000 -> 15
@@ -318,18 +337,36 @@ class TsClient {
                         }
                         if (events.isNotEmpty()) lastEventAt = System.currentTimeMillis()
                         for (event in events) {
+                            if (event.type == "view_ready" || event.type == "view_changed") {
+                                revisionsReported = true
+                                (event.data["revision"] as? Number)?.let { pendingRevision = it.toLong() }
+                            }
                             val emitted = if (event.type == "text_message") _chatEvents.tryEmit(event)
                             else _events.tryEmit(event)
                             if (!emitted) Log.w(TAG, "Event buffer overflow, dropped ${event.type}")
                             handleEvent(event)
                         }
-                        // Refresh on events, and otherwise at a fixed cadence:
-                        // the poll budget now varies with capture activity, so
-                        // a tick counter would drift with it.
+                        // Rebuild the Java-side snapshot only when the native
+                        // view actually changed: nativeGetUsers/Channels
+                        // re-serialise every user and channel through JNI, and
+                        // this loop runs on the same single thread as sendAudio
+                        // — doing it on a timer costs the uplink periodic
+                        // jitter for nothing.
                         val now = System.currentTimeMillis()
-                        if (events.isNotEmpty() || now - lastRefreshAt >= STATE_REFRESH_INTERVAL_MS) {
+                        val viewChanged = pendingRevision != null && pendingRevision != appliedRevision
+                        val due = now - lastRefreshAt >= STATE_REFRESH_INTERVAL_MS
+                        val refresh = when {
+                            // Library without revisions: previous behaviour
+                            !revisionsReported -> events.isNotEmpty() || due
+                            viewChanged -> true
+                            // Idle safety net: a state change that produced no
+                            // view event is still picked up, just later
+                            else -> now - lastRefreshAt >= STATE_FALLBACK_REFRESH_MS
+                        }
+                        if (refresh) {
                             lastRefreshAt = now
                             refreshState()
+                            appliedRevision = pendingRevision
                         }
                         // The server only pushes counter/uptime updates when
                         // asked — poll while the info sheet is open so its
@@ -463,7 +500,7 @@ class TsClient {
             // it on every refresh (2Hz + once per event) drowned the audio
             // summary lines in the 2000-line log ring, so it only prints when
             // the roster itself changes — talk status ticks don't qualify
-            if (rosterOf(filteredUsers) != rosterOf(previous)) {
+            if (rosterIdOf(filteredUsers) != rosterIdOf(previous)) {
                 Log.d(TAG, "refreshState: roster changed (${filteredUsers.size} users)")
                 for (u in filteredUsers) {
                     Log.d(TAG, "  user: ${u.nickname} id=${u.id} ch=${u.channelId}")
@@ -481,8 +518,15 @@ class TsClient {
     }
 
     /** Roster identity (who is where) — deliberately excludes volatile state. */
-    private fun rosterOf(users: List<User>): List<String> =
-        users.map { "${it.id}:${it.nickname}:${it.channelId}" }
+    private fun rosterIdOf(users: List<User>): Long {
+        var h = users.size.toLong()
+        for (u in users) {
+            h = h * 31 + u.id
+            h = h * 31 + (u.nickname?.hashCode() ?: 0)
+            h = h * 31 + u.channelId
+        }
+        return h
+    }
 
     private fun closeAfterNativeFailure() {
         val c = client
