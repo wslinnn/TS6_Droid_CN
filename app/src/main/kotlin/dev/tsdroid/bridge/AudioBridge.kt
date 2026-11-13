@@ -153,7 +153,7 @@ class AudioBridge(
 
     private val userDiag = ConcurrentHashMap<Int, UserDiag>()
     @Volatile
-    private var lastDiagFlush = System.currentTimeMillis()
+    private var lastDiagFlush = SystemClock.elapsedRealtime()
 
     /** Short-frame sightings this diagnostics window (decode-skip decision pending the count). */
     @Volatile
@@ -745,7 +745,7 @@ class AudioBridge(
                         // ERLE probe observes the post-AEC mic — what actually gets
                         // transmitted; unaffected by mute (which only gates the
                         // encoder).
-                        echoProbe.onMicFrame(buffer, System.currentTimeMillis() < farActiveUntil)
+                        echoProbe.onMicFrame(buffer, SystemClock.elapsedRealtime() < farActiveUntil)
                     } else {
                         // Partial read (0 < read < frame): still proves the device is alive
                         lastCaptureProgressAt = SystemClock.elapsedRealtime()
@@ -762,7 +762,7 @@ class AudioBridge(
                         if (micMode == MicMode.VAD) {
                             // Gate transmission on the voice-activation state machine
                             vadGate.openThresholdDb = vadThresholdDb
-                            val toSend = vadGate.process(buffer, System.currentTimeMillis())
+                            val toSend = vadGate.process(buffer, SystemClock.elapsedRealtime())
                             if (toSend != null) {
                                 for (frame in toSend) {
                                     val encoded = try {
@@ -1143,7 +1143,7 @@ class AudioBridge(
         while (currentCoroutineContext().isActive) {
             var hasData = false
             java.util.Arrays.fill(mixAcc, 0)
-            val now = System.currentTimeMillis()
+            val now = SystemClock.elapsedRealtime()
 
             if (now - lastDiagFlush >= DIAG_FLUSH_MS) {
                 lastDiagFlush = now
@@ -1337,7 +1337,7 @@ class AudioBridge(
         if (gainFactor == 0f) { discardGainZero++; return } // Speaker slider at 0% — same as muted
         val queue = userQueues.getOrPut(userId) { FrameQueue(MAX_QUEUE_FRAMES) }
         // Full queue evicts the OLDEST frame: fresh speech beats stale speech
-        queue.offer(opusData, seq)
+        queue.offer(opusData, seq, SystemClock.elapsedRealtime())
         playbackWake.offer(Unit)
     }
 

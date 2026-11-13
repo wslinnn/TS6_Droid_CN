@@ -28,8 +28,12 @@ class FrameQueue(private val capacity: Int) {
      * Enqueue a frame, evicting the oldest one when [capacity] is reached.
      *
      * @param seq sender's per-packet sequence number (wraps at 2^16)
+     * @param nowMs arrival time on a **monotonic** clock, in the same timeline
+     *     the consumer passes to [oldestAgeMs] (wall clock is not used here on
+     *     purpose: an NTP/user time change would otherwise show up as a
+     *     negative or hour-long frame age)
      */
-    fun offer(frame: ByteArray, seq: Int) {
+    fun offer(frame: ByteArray, seq: Int, nowMs: Long) {
         synchronized(this) {
             val gap = if (lastSeq < 0) {
                 GAP_RESET
@@ -44,7 +48,7 @@ class FrameQueue(private val capacity: Int) {
             }
             lastSeq = seq
             if (queue.size >= capacity) queue.removeFirst()
-            queue.addLast(Entry(frame, gap, System.currentTimeMillis()))
+            queue.addLast(Entry(frame, gap, nowMs))
         }
     }
 
