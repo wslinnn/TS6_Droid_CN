@@ -116,6 +116,13 @@ class AudioBridge(
         /** Minimum spacing between automatic output-track rebuilds. */
         private const val PLAYBACK_REBUILD_MIN_INTERVAL_MS = 2_000L
 
+        /**
+         * How often the capture loop polls the AEC blow-up-guard counter.
+         * Well under the 30 s diagnostics window, so the reported delta
+         * covers the whole window at a few seconds' resolution.
+         */
+        private const val AEC_ZEROED_POLL_MS = 5_000L
+
         /** Output volume multiplier while another app holds transient focus (can-duck). */
         private const val DUCK_FACTOR = 0.3f
 
@@ -231,9 +238,20 @@ class AudioBridge(
     @Volatile
     private var sendFailCount = 0
 
-    /** Live AEC handle for the zeroed-frame diagnostic (set/cleared by the capture loop). */
+    /**
+     * Zeroed frames the AEC blow-up guard produced in this diagnostics
+     * window. The engine's cumulative counter is readable only from the
+     * thread that owns the handle: it is single-threaded, and the handle can
+     * be destroyed under a diagnostics reader (the capture session ends in
+     * its own coroutine), so the capture loop polls the counter and the 30 s
+     * flush drains this accumulator — a pure counter read across threads.
+     */
     @Volatile
-    private var echoCancellerRef: EchoCanceller? = null
+    private var aecZeroedThisWindow = 0L
+
+    /** False once the loaded native library reports no such counter (mixed version). */
+    @Volatile
+    private var aecZeroedSupported = true
 
     // Playback discard counters by reason — written on the native pump
     // thread, diffed/reset in the 30s flush. A non-zero suspended count means
@@ -256,9 +274,6 @@ class AudioBridge(
     private var trackRebuildCount = 0
     @Volatile
     private var playbackWritesTotal = 0L
-
-    /** Previous cumulative zeroed-frame total — playback thread only. */
-    private var lastEchoZeroedTotal = -1L
 
     /**
      * Guards [audioRecord] swaps between startCapture/stopCapture (caller
@@ -555,7 +570,6 @@ class AudioBridge(
                 // are synchronized, so a concurrent playback push can never touch
                 // a destroyed native handle.
                 aecRunning = false
-                echoCancellerRef = null
                 echoReference.reset()
             }
         }
@@ -646,7 +660,7 @@ class AudioBridge(
                         } else {
                             echoReference.reset()
                             aecRunning = true
-                            echoCancellerRef = engine
+                            aecZeroedSupported = true
                             true
                         }
                     }
@@ -665,14 +679,12 @@ class AudioBridge(
                     // This session owns the generation but has no engine. The
                     // previous session's cleanup deliberately skipped these
                     // fields (stale generation), so they can still say
-                    // "AEC running" and point at an already closed handle:
-                    // drop the wiring here or the playback loop keeps feeding
-                    // a reference nobody consumes and the 30s diagnostic reads
-                    // a closed handle (reported as -1 forever).
+                    // "AEC running": drop the wiring here or the playback loop
+                    // keeps feeding a reference nobody consumes and the 30 s
+                    // diagnostic reports a stale zeroed-frame count.
                     synchronized(captureSwapLock) {
                         if (captureGeneration.get() == generation) {
                             aecRunning = false
-                            echoCancellerRef = null
                         }
                     }
                     null
@@ -680,6 +692,10 @@ class AudioBridge(
                 val aecFar = ShortArray(FRAME_SIZE_SAMPLES)
                 val aecOut = ShortArray(FRAME_SIZE_SAMPLES)
                 var aecFailStreak = 0
+                // AEC blow-up-guard polling (capture-thread owned, see the
+                // accumulator's doc: the handle must not be read elsewhere)
+                var lastZeroedTotal = -1L
+                var lastZeroedPollAt = 0L
 
                 // Rebuild the capture device from inside the loop. Returns the
                 // fresh record, or null when capture was stopped meanwhile or
@@ -849,6 +865,28 @@ class AudioBridge(
                             if (aecFailStreak++ == 0) Log.e(TAG, "AEC frame bypass: ${t.message}")
                         }
                         recordEchoProcUs((System.nanoTime() - t0) / 1000)
+                        // Blow-up-guard counter, polled here (never from the
+                        // diagnostics thread): a zeroed frame is a 20 ms hole
+                        // in the transmitted stream, so any non-zero rate is a
+                        // bug report and the 30 s line reports the delta
+                        val zeroedNow = SystemClock.elapsedRealtime()
+                        if (zeroedNow - lastZeroedPollAt >= AEC_ZEROED_POLL_MS) {
+                            lastZeroedPollAt = zeroedNow
+                            val total = try {
+                                engine.zeroedFrames()
+                            } catch (t: Throwable) {
+                                -1L
+                            }
+                            if (total < 0) {
+                                // Mixed-version native library — stop asking
+                                aecZeroedSupported = false
+                            } else {
+                                if (lastZeroedTotal in 0 until total) {
+                                    aecZeroedThisWindow += total - lastZeroedTotal
+                                }
+                                lastZeroedTotal = total
+                            }
+                        }
                     }
                     // ERLE probe observes the post-AEC mic — what actually gets
                     // transmitted; unaffected by mute (which only gates the
@@ -1604,25 +1642,15 @@ class AudioBridge(
 
     /** Emit the 30s receive/encode diagnostic aggregates into AppLog. */
     private fun flushAudioDiag() {
-        /** Zeroed-frame delta over the window; -1 = unknown (no AEC / old .so). */
+        /**
+         * Zeroed-frame delta the capture loop accumulated over the window;
+         * -1 = unknown (no AEC this session, or a native library without the
+         * counter). Drains the accumulator so the next window starts at zero.
+         */
         fun readEchoZeroedDelta(): Long {
-            val aec = echoCancellerRef ?: run {
-                lastEchoZeroedTotal = -1L
-                return -1L
-            }
-            val total = try {
-                aec.zeroedFrames()
-            } catch (_: Throwable) {
-                lastEchoZeroedTotal = -1L
-                return -1L
-            }
-            if (total < 0) return -1L // mixed-version native library
-            if (lastEchoZeroedTotal < 0) {
-                lastEchoZeroedTotal = total
-                return 0L
-            }
-            val delta = total - lastEchoZeroedTotal
-            lastEchoZeroedTotal = total
+            if (!aecRunning || !aecZeroedSupported) return -1L
+            val delta = aecZeroedThisWindow
+            aecZeroedThisWindow = 0
             return delta
         }
 
