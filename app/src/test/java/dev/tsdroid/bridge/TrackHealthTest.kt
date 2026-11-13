@@ -116,6 +116,17 @@ class TrackHealthTest {
     }
 
     @Test
+    fun `externally requested rebuilds are rate limited too`() {
+        val h = health()
+        // Nothing attempted yet: a route change may rebuild immediately
+        assertTrue(h.canAttemptRebuild(0))
+        h.onRebuildAttempt(1_000)
+        assertFalse(h.canAttemptRebuild(1_500))
+        assertFalse(h.canAttemptRebuild(2_999))
+        assertTrue(h.canAttemptRebuild(3_000))
+    }
+
+    @Test
     fun `streaks are exposed for diagnostics`() {
         val h = health()
         h.onWrite(written = 0, expected = 1920, nowMs = 20)

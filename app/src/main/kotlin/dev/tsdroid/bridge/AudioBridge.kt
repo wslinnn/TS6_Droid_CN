@@ -340,18 +340,27 @@ class AudioBridge(
      */
     private val audioDeviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
-            onAudioRouteChanged(addedDevices.joinToString { it.type.typeLabel() })
+            onAudioRouteChanged(addedDevices)
         }
 
         override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
-            onAudioRouteChanged(removedDevices.joinToString { it.type.typeLabel() })
+            onAudioRouteChanged(removedDevices)
         }
     }
 
-    private fun onAudioRouteChanged(what: String) {
-        Log.i(TAG, "Audio devices changed ($what) — resetting AEC and rebuilding the output track")
-        aecResetRequested = true
-        trackRebuildRequested = true
+    private fun onAudioRouteChanged(devices: Array<out AudioDeviceInfo>) {
+        val sinks = devices.any { it.isSink }
+        val sources = devices.any { it.isSource }
+        // A microphone appearing or disappearing moves the acoustic path just
+        // as much as a speaker does: the AEC has to re-converge either way
+        if (sinks || sources) aecResetRequested = true
+        // Only an output change needs the track itself re-created
+        if (sinks) trackRebuildRequested = true
+        Log.i(
+            TAG,
+            "Audio devices changed (${devices.joinToString { it.type.typeLabel() }}) — " +
+                "aecReset=$aecResetRequested trackRebuild=$trackRebuildRequested",
+        )
     }
 
     private fun Int.typeLabel(): String = when (this) {
@@ -1230,18 +1239,31 @@ class AudioBridge(
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
         )
-        var fresh = buildAudioTrack(minBuf, lowLatency = true)
-        if (fresh?.state != AudioTrack.STATE_INITIALIZED) {
-            Log.w(TAG, "Low-latency track not initialized; retrying without performance mode")
-            fresh?.release()
-            fresh = buildAudioTrack(minBuf, lowLatency = false)
-        }
-        if (fresh?.state != AudioTrack.STATE_INITIALIZED) {
-            fresh?.release()
+        // A device that is mid-removal can throw from the builder or from
+        // play(); neither may escape into the playback loop (it would restart
+        // the whole loop and leak the half-built track)
+        var fresh: AudioTrack? = null
+        try {
+            fresh = buildAudioTrack(minBuf, lowLatency = true)
+            if (fresh.state != AudioTrack.STATE_INITIALIZED) {
+                Log.w(TAG, "Low-latency track not initialized; retrying without performance mode")
+                fresh.release()
+                fresh = buildAudioTrack(minBuf, lowLatency = false)
+            }
+            if (fresh.state != AudioTrack.STATE_INITIALIZED) {
+                Log.e(TAG, "AudioTrack could not be initialized")
+                fresh.release()
+                return null
+            }
+            fresh.play()
+            return fresh
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed to create the output track", t)
+            try {
+                fresh?.release()
+            } catch (_: Throwable) {}
             return null
         }
-        fresh.play()
-        return fresh
     }
 
     /**
@@ -1253,7 +1275,7 @@ class AudioBridge(
      */
     private fun replaceAudioTrack(reason: String): AudioTrack? {
         val fresh = newAudioTrack() ?: run {
-            Log.e(TAG, "Output track rebuild failed ($reason); retrying on a later frame")
+            Log.e(TAG, "Output track rebuild failed ($reason); will retry")
             return null
         }
         val old = synchronized(trackSwapLock) {
@@ -1372,6 +1394,12 @@ class AudioBridge(
                 depth.reset()
                 // The AEC reference timeline belonged to the old route
                 echoReference.reset()
+            } else {
+                // Could not build one now (device mid-removal, resource
+                // exhaustion). Keep asking: the request is rate limited by
+                // TrackHealth, so this retries instead of waiting for the next
+                // device event or five more failed writes.
+                trackRebuildRequested = true
             }
         }
 
@@ -1397,8 +1425,10 @@ class AudioBridge(
             }
 
             // A device change republished the route: rebuild before decoding
-            // anything into a track that may no longer be routed anywhere
-            if (trackRebuildRequested) {
+            // anything into a track that may no longer be routed anywhere.
+            // Rate limited — a failed attempt re-raises the request, and the
+            // device may keep refusing for a while.
+            if (trackRebuildRequested && health.canAttemptRebuild(now)) {
                 trackRebuildRequested = false
                 rebuildTrack("audio route changed")
             }
@@ -1677,9 +1707,22 @@ class AudioBridge(
         // keep a thread at URGENT_AUDIO for unrelated work)
         captureExecutor.shutdown()
         playbackExecutor.shutdown()
-        audioTrack?.stop()
-        audioTrack?.release()
-        audioTrack = null
+        // Swap the field out under the lock the playback loop reads it with:
+        // releasing it in place could free the very track the loop just read
+        // for its next write
+        val dyingTrack = synchronized(trackSwapLock) {
+            val previous = audioTrack
+            audioTrack = null
+            previous
+        }
+        if (dyingTrack != null) {
+            try {
+                dyingTrack.stop()
+            } catch (_: Throwable) {}
+            try {
+                dyingTrack.release()
+            } catch (_: Throwable) {}
+        }
         encoder?.close()
         encoder = null
         // Close per-user decoders

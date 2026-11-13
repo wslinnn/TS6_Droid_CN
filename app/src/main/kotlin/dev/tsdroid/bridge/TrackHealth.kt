@@ -64,6 +64,15 @@ internal class TrackHealth(
         playStateStall = 0
     }
 
+    /**
+     * Whether a rebuild may be attempted right now. Used for externally
+     * requested rebuilds (route change), which have no streak of their own —
+     * a device that keeps refusing a new track must not be re-created every
+     * frame.
+     */
+    fun canAttemptRebuild(nowMs: Long): Boolean =
+        lastRebuildAt == NO_REBUILD || nowMs - lastRebuildAt >= minRebuildIntervalMs
+
     /** Consecutive stalled writes so far (diagnostics). */
     val writeStallStreak: Int get() = writeStall
 
