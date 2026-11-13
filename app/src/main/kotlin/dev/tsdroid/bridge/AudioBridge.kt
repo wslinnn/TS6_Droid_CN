@@ -1560,17 +1560,27 @@ class AudioBridge(
                         continue
                     }
                 }
-                val framesWritten = mixBytes.size / 2
-                depth.onFramesWritten(framesWritten)
-                playbackWritesTotal += framesWritten
-                // AEC reference: exactly the PCM handed to the speaker
-                // (post-gain, post-duck, post-limiter) — feeding the raw
-                // mix pre-DUCK would feed a distorted reference.
-                if (aecRunning) {
-                    echoReference.push(mixBuffer, SystemClock.elapsedRealtime())
+                // Count only what the track actually accepted: a short write
+                // (or -1) would otherwise add a frame that never plays, and
+                // since the played counter only advances with real playback,
+                // that phantom frame raises the measured depth for good — up
+                // to the point where the watermark blocks the loop forever.
+                val framesWritten = written.coerceIn(0, mixBytes.size) / 2
+                if (framesWritten > 0) {
+                    depth.onFramesWritten(framesWritten)
+                    playbackWritesTotal += framesWritten
+                    // AEC reference: exactly the PCM handed to the speaker
+                    // (post-gain, post-duck, post-limiter) — feeding the raw
+                    // mix pre-DUCK would feed a distorted reference. A frame
+                    // the track refused never reached the speaker: leaving it
+                    // out lets the reference timeline advance with silence,
+                    // which is what actually happened.
+                    if (aecRunning) {
+                        echoReference.push(mixBuffer, SystemClock.elapsedRealtime())
+                    }
+                    // Probe sees the post-gain mix — exactly what the speaker plays
+                    echoProbe.onFarFrame(mixBuffer)
                 }
-                // Probe sees the post-gain mix — exactly what the speaker plays
-                echoProbe.onFarFrame(mixBuffer)
                 farActiveUntil = now + FAR_ACTIVE_GRACE_MS
             } else {
                 // No audio data — block until a frame arrives (producer
