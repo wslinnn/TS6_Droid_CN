@@ -20,9 +20,14 @@ class RosterSignatureTest {
         avatarId: String? = "av-1",
         isTalking: Boolean = false,
         nickname: String = "alice",
+        isAway: Boolean = false,
+        isRecording: Boolean = false,
+        isInputMuted: Boolean = false,
+        isOutputMuted: Boolean = false,
+        hasInputHardware: Boolean = true,
     ) = User(
         id, uid, 0L, channelId, nickname, 0, isTalking,
-        false, false, true, true, false, false,
+        isInputMuted, isOutputMuted, hasInputHardware, true, isAway, isRecording,
         false, false, false, 0, "", longArrayOf(), 0L,
         "android", "1.0", "", "", avatarId, 0L, null, null,
     )
@@ -96,5 +101,38 @@ class RosterSignatureTest {
     fun `empty roster has a stable signature`() {
         assertEquals(rosterSignatureOf(emptyList()), rosterSignatureOf(emptyList()))
         assertNotEquals(rosterSignatureOf(emptyList()), rosterSignatureOf(listOf(user())))
+    }
+
+    // --- display signature (what the channel tree renders) ---
+
+    @Test
+    fun `display signature ignores talk flips too`() {
+        val quiet = listOf(user(isTalking = false), user(id = 2, uid = "uid-2"))
+        val talking = listOf(user(isTalking = true), user(id = 2, uid = "uid-2", isTalking = true))
+        assertEquals(displaySignatureOf(quiet), displaySignatureOf(talking))
+    }
+
+    @Test
+    fun `display signature tracks every painted flag`() {
+        val base = listOf(user())
+        val variants = listOf(
+            listOf(user(nickname = "alice (mobile)")),
+            listOf(user(isAway = true)),
+            listOf(user(isRecording = true)),
+            listOf(user(isInputMuted = true)),
+            listOf(user(isOutputMuted = true)),
+            listOf(user(hasInputHardware = false)),
+            listOf(user(channelId = 11)),
+            listOf(user(avatarId = "av-2")),
+            listOf(user(), user(id = 2, uid = "uid-2")),
+        )
+        val expected = displaySignatureOf(base)
+        for (variant in variants) {
+            assertNotEquals(
+                "a rendered change must invalidate the tree",
+                expected,
+                displaySignatureOf(variant),
+            )
+        }
     }
 }

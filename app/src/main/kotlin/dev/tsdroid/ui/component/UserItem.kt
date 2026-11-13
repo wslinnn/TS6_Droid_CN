@@ -62,6 +62,10 @@ fun UserItem(
     isLocallyMuted: Boolean = false,
     isWhisperTalking: Boolean = false,
     isSelf: Boolean = false,
+    // Speaking state is passed in, not read from [user]: the roster list can
+    // then stay stable across talk flips (it is what the tree memoises on) and
+    // the indicator still tracks who is speaking right now.
+    isTalking: Boolean = user.isTalking,
 ) {
     Box(modifier = modifier) {
         Row(
@@ -77,7 +81,7 @@ fun UserItem(
             AvatarWithRing(
                 avatar = avatar,
                 nickname = user.nickname,
-                isTalking = user.isTalking,
+                isTalking = isTalking,
                 // Own row: server never echoes our talk status back, the ring
                 // runs on local VAD — refine it to amber while whisper mode is on
                 isWhisperTalking = isWhisperTalking || (isSelf && WhisperManager.isWhisperActive),
@@ -93,7 +97,7 @@ fun UserItem(
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.weight(1f),
                 color = when {
-                    user.isTalking -> MaterialTheme.colorScheme.primary
+                    isTalking -> MaterialTheme.colorScheme.primary
                     user.isAway -> MaterialTheme.colorScheme.onSurfaceVariant
                     else -> MaterialTheme.colorScheme.onSurface
                 },

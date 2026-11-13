@@ -49,6 +49,13 @@ fun ChannelTree(
     onUserLongPress: ((User) -> Unit)? = null,
     mutedUserIds: Set<Int> = emptySet(),
     whisperTalkingUserIds: Set<Int> = emptySet(),
+    /**
+     * Who is speaking right now, when the caller tracks that separately from
+     * the roster list. Passing it keeps the tree memoisation tied to roster
+     * changes instead of every talk flip; null means "read the flag on each
+     * user", which is what a caller that never patches the list wants.
+     */
+    talkingUserIds: Set<Int>? = null,
     channelIcons: Map<Long, ImageBitmap> = emptyMap(),
     userAvatars: Map<String, ImageBitmap> = emptyMap(),
     onWhisperClick: ((Int) -> Unit)? = null,
@@ -101,6 +108,7 @@ fun ChannelTree(
                     isWhisperTalking = item.user.id in whisperTalkingUserIds,
                     onWhisperClick = onWhisperClick,
                     isSelf = item.user.id == selfId,
+                    isTalking = talkingUserIds?.let { item.user.id in it } ?: item.user.isTalking,
                 )
             }
         }

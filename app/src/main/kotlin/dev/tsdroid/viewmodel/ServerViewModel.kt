@@ -233,6 +233,18 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     private val _users = MutableStateFlow<List<User>>(emptyList())
     val users: StateFlow<List<User>> = _users.asStateFlow()
 
+    /**
+     * Who is shown as speaking: the native talk flag, the event-derived set
+     * and the local VAD union — the same set the patched [users] list carries.
+     *
+     * Exposed separately so a UI can drive the speaking indicator from it and
+     * keep its roster-derived memoisation stable across talk flips: the users
+     * flow re-emits on every start/stop, and rebuilding indexes and the
+     * channel tree each time is the main remaining cost in a large channel.
+     */
+    private val _speakingUserIds = MutableStateFlow<Set<Int>>(emptySet())
+    val speakingUserIds: StateFlow<Set<Int>> = _speakingUserIds.asStateFlow()
+
     private val _serverInfo = MutableStateFlow<ServerInfo?>(null)
     val serverInfo: StateFlow<ServerInfo?> = _serverInfo.asStateFlow()
 
@@ -388,7 +400,7 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
 
                 val myId = tsClient?.clientId
 
-                users.map { user ->
+                val patched = users.map { user ->
                     val isLocallyTalking = (user.id == myId && localTalking)
                     // The native layer maintains isTalking itself since
                     // tslib 0.2.0 (talk events + audio); the event-derived
@@ -401,6 +413,15 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                     else if (!shouldBeTalking && user.isTalking) user.withTalking(false)
                     else user
                 }
+                // Derived from the patched list so there is exactly one
+                // definition of "speaking" in the app; the StateFlow drops
+                // identical sets, so a flip costs one set build, not a
+                // roster rebuild downstream
+                _speakingUserIds.value = patched.asSequence()
+                    .filter { it.isTalking }
+                    .map { it.id }
+                    .toSet()
+                patched
             }.collect { _users.value = it }
         }
         // When current channel changes, query permissions if the server has
@@ -1820,6 +1841,29 @@ internal fun rosterSignatureOf(users: List<User>): Long {
         h = h * 31 + (user.uid?.hashCode() ?: 0)
         h = h * 31 + user.channelId
         h = h * 31 + (user.avatarId?.hashCode() ?: 0)
+    }
+    return h
+}
+
+/**
+ * Identity of everything the channel tree *renders* except speaking state —
+ * the roster plus the flags painted next to a name (away, recording, muted,
+ * hardware). Used to key UI memoisation: a talk flip must not rebuild the
+ * tree, while an away/mute/rename change must.
+ */
+internal fun displaySignatureOf(users: List<User>): Long {
+    var h = users.size.toLong()
+    for (user in users) {
+        h = h * 31 + user.id
+        h = h * 31 + (user.uid?.hashCode() ?: 0)
+        h = h * 31 + user.channelId
+        h = h * 31 + (user.avatarId?.hashCode() ?: 0)
+        h = h * 31 + (user.nickname?.hashCode() ?: 0)
+        h = h * 31 + if (user.isAway) 1 else 0
+        h = h * 31 + if (user.isRecording) 1 else 0
+        h = h * 31 + if (user.isInputMuted) 1 else 0
+        h = h * 31 + if (user.isOutputMuted) 1 else 0
+        h = h * 31 + if (user.hasInputHardware) 1 else 0
     }
     return h
 }

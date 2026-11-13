@@ -117,6 +117,7 @@ import dev.tsdroid.viewmodel.ChatMessage
 import dev.tsdroid.viewmodel.DownloadState
 import dev.tsdroid.viewmodel.FileAttachment
 import dev.tsdroid.viewmodel.ServerViewModel
+import dev.tsdroid.viewmodel.displaySignatureOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -135,11 +136,15 @@ fun ServerScreen(
 ) {
     val channels by viewModel.channels.collectAsStateWithLifecycle()
     val users by viewModel.users.collectAsStateWithLifecycle()
-    // Index lookups: the roster re-emits on every talk-status flip, and each of
-    // the per-recomposition `users.find` calls below would otherwise scan the
-    // whole roster (200 users on a busy server) several times a second
-    val usersById = remember(users) { users.associateBy { it.id } }
-    val usersByUid = remember(users) {
+    val speakingUserIds by viewModel.speakingUserIds.collectAsStateWithLifecycle()
+    // The users flow re-emits on every talk start/stop (User.equals includes
+    // the flag). Everything the tree derives from the roster is keyed on a
+    // display signature instead — roster plus the flags the rows paint — so a
+    // flip no longer rebuilds the indexes and the tree; the speaking ring
+    // reads `speakingUserIds` directly.
+    val roster = remember(users) { displaySignatureOf(users) }
+    val usersById = remember(roster) { users.associateBy { it.id } }
+    val usersByUid = remember(roster) {
         val indexed = HashMap<String, User>(users.size)
         for (user in users) {
             val uid = user.uid
@@ -147,7 +152,7 @@ fun ServerScreen(
         }
         indexed
     }
-    val treeUsers = remember(users, viewModel.myClientId) {
+    val treeUsers = remember(roster, viewModel.myClientId) {
         val myId = viewModel.myClientId
         if (myId == null) users else users.filter { it.id != myId }
     }
@@ -549,7 +554,10 @@ fun ServerScreen(
             // Channel tree — full screen
             ChannelTree(
                 channels = channels,
-                users = users,
+                // Roster-stable list: the speaking ring comes from
+                // `speakingUserIds` below, so a talk flip recomposes the rows
+                // that changed instead of rebuilding the whole tree
+                users = treeUsers,
                 onChannelClick = { channelId ->
                     val channel = channels.find { it.id == channelId }
                     if (channel?.hasPassword == true) {
@@ -576,6 +584,7 @@ fun ServerScreen(
                 },
                 mutedUserIds = mutedUserIds,
                 whisperTalkingUserIds = whisperTalkingUserIds,
+                talkingUserIds = speakingUserIds,
                 channelIcons = channelIcons,
                 userAvatars = userAvatars,
                 selfId = viewModel.myClientId,
