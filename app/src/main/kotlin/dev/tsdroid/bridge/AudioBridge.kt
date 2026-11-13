@@ -168,6 +168,10 @@ class AudioBridge(
         var fecRepaired = 0
         var plc = 0
         var queuePeak = 0
+        // Frames the decoder rejected. A sender using 40/60 ms packets does
+        // not fit the fixed 960-sample decode buffers, so this counter going
+        // up means "this user is silent for a reason", not "the network is bad".
+        var decodeFail = 0
     }
 
     private val userDiag = ConcurrentHashMap<Int, UserDiag>()
@@ -1478,7 +1482,21 @@ class AudioBridge(
                     if (mixIn(userId, decoder.decode(entry.frame))) {
                         hasData = true
                     }
-                } catch (_: Exception) {}
+                } catch (t: Exception) {
+                    // Swallowing this made a mismatched sender (non-20 ms
+                    // frames, corrupt TOC) indistinguishable from a dead mic:
+                    // the user is simply silent for the whole session. Count
+                    // it per user and say it once.
+                    val failing = userDiag.getOrPut(userId) { UserDiag() }
+                    failing.decodeFail++
+                    if (failing.decodeFail == 1) {
+                        Log.w(
+                            TAG,
+                            "Opus decode failed for user $userId (${entry.frame.size}B, " +
+                                "expected one 20ms frame): that sender may stay silent — ${t.message}",
+                        )
+                    }
+                }
 
                 val diag = userDiag.getOrPut(userId) { UserDiag() }
                 diag.recv++
@@ -1660,14 +1678,19 @@ class AudioBridge(
         }
 
         for ((userId, d) in userDiag) {
-            if (d.recv > 0 || d.lost > 0 || d.plc > 0) {
-                Log.i(TAG, "AudioRx user=$userId 30s: recv=${d.recv} lost=${d.lost} fec=${d.fecRepaired} plc=${d.plc} queuePeak=${d.queuePeak}")
+            if (d.recv > 0 || d.lost > 0 || d.plc > 0 || d.decodeFail > 0) {
+                Log.i(
+                    TAG,
+                    "AudioRx user=$userId 30s: recv=${d.recv} lost=${d.lost} fec=${d.fecRepaired} " +
+                        "plc=${d.plc} queuePeak=${d.queuePeak} decFail=${d.decodeFail}",
+                )
             }
             d.recv = 0
             d.lost = 0
             d.fecRepaired = 0
             d.plc = 0
             d.queuePeak = 0
+            d.decodeFail = 0
         }
         val n = encodeSampleCount
         if (n > 0) {
