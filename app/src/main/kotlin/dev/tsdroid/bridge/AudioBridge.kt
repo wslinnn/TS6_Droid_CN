@@ -56,10 +56,12 @@ class AudioBridge(
         private const val ZERO_FRAME_STREAK_LIMIT = 150
 
         /**
-         * Output gain stage with a soft knee: linear below half scale
-         * (unity listening is untouched), smoothly compressed above — an
-         * boosted mix tops out near full scale instead of hard-clipping.
-         * Slope-continuous at the knee (k=2 keeps the derivative at 1).
+         * Mic-boost stage with a soft knee: linear below half scale, smoothly
+         * compressed above — a boosted capture signal tops out near full
+         * scale instead of hard-clipping. Slope-continuous at the knee (k=2
+         * keeps the derivative at 1). The playback mix does NOT use this:
+         * summing voices is handled by [PcmMixer]'s frame peak limiter, which
+         * never distorts the waveform.
          */
         internal fun softClip(x: Float): Short {
             val t = x / 32767f
@@ -1116,35 +1118,21 @@ class AudioBridge(
      */
     private suspend fun runPlaybackLoop() {
         val mixBuffer = ShortArray(FRAME_SIZE_SAMPLES)
+        // Integer accumulator: summing voices must not clip per sample, the
+        // rendered frame gets one peak-limiter pass instead (see PcmMixer)
+        val mixAcc = IntArray(FRAME_SIZE_SAMPLES)
+        val limiter = PeakLimiter()
         val decodeBuffer = ShortArray(FRAME_SIZE_SAMPLES)
         // Total PCM frames handed to AudioTrack — compared against
         // playbackHeadPosition to measure the track's buffered depth.
         var writtenFrames = 0L
         var currentTrack: AudioTrack? = null
 
-        // Sum one decoded frame into the mix buffer with per-user gain
+        // Sum one decoded frame into the mix accumulator with per-user gain
         fun mixIn(userId: Int, pcm: ByteArray): Boolean {
             return try {
                 bytesToShorts(pcm, decodeBuffer)
-                val factor = userGainFactors[userId]
-                if (factor != null && factor != 1f) {
-                    for (i in mixBuffer.indices) {
-                        val sum = mixBuffer[i] + (decodeBuffer[i] * factor).toInt()
-                        mixBuffer[i] = sum.coerceIn(
-                            Short.MIN_VALUE.toInt(),
-                            Short.MAX_VALUE.toInt(),
-                        ).toShort()
-                    }
-                } else {
-                    // Mix: sum with clipping
-                    for (i in mixBuffer.indices) {
-                        val sum = mixBuffer[i].toInt() + decodeBuffer[i].toInt()
-                        mixBuffer[i] = sum.coerceIn(
-                            Short.MIN_VALUE.toInt(),
-                            Short.MAX_VALUE.toInt(),
-                        ).toShort()
-                    }
-                }
+                PcmMixer.accumulate(mixAcc, decodeBuffer, userGainFactors[userId] ?: 1f)
                 true
             } catch (_: Exception) {
                 false
@@ -1153,7 +1141,7 @@ class AudioBridge(
 
         while (currentCoroutineContext().isActive) {
             var hasData = false
-            mixBuffer.fill(0)
+            java.util.Arrays.fill(mixAcc, 0)
             val now = System.currentTimeMillis()
 
             if (now - lastDiagFlush >= DIAG_FLUSH_MS) {
@@ -1265,13 +1253,13 @@ class AudioBridge(
 
             if (hasData) {
                 // Focus ducking multiplies the user gain — audio stays
-                // faintly audible under another app's short prompt
-                val gain = gainFactor * (if (duckedByFocus) DUCK_FACTOR else 1f)
-                if (gain != 1.0f) {
-                    for (i in mixBuffer.indices) {
-                        mixBuffer[i] = softClip(mixBuffer[i] * gain)
-                    }
-                }
+                // faintly audible under another app's short prompt. The mix
+                // is rendered through the peak limiter, so a frame whose
+                // summed voices exceed full scale is scaled down as a whole
+                // instead of being clamped sample by sample.
+                val outGain = gainFactor * (if (duckedByFocus) DUCK_FACTOR else 1f)
+                val frameGain = outGain * limiter.next(PcmMixer.peak(mixAcc, outGain))
+                PcmMixer.render(mixAcc, mixBuffer, frameGain)
                 val track = synchronized(trackSwapLock) { audioTrack }
                 val bytes = shortsToBytes(mixBuffer)
                 val written = try {
@@ -1292,7 +1280,7 @@ class AudioBridge(
                 writtenFrames += framesWritten
                 playbackWritesTotal += framesWritten
                 // AEC reference: exactly the PCM handed to the speaker
-                // (post-gain, post-duck, post-softClip) — feeding the raw
+                // (post-gain, post-duck, post-limiter) — feeding the raw
                 // mix pre-DUCK would feed a distorted reference.
                 if (aecRunning) {
                     echoReference.push(mixBuffer, SystemClock.elapsedRealtime())
