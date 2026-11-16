@@ -283,6 +283,10 @@ class AudioBridge(
     /** Output-track rebuilds this diagnostics window (self-heal / route change). */
     @Volatile
     private var trackRebuildCount = 0
+
+    /** Consecutive failed track rebuilds — throttles the retry log. */
+    @Volatile
+    private var trackRebuildFailures = 0
     @Volatile
     private var playbackWritesTotal = 0L
 
@@ -434,13 +438,14 @@ class AudioBridge(
     private val captureExecutor = newAudioThread("TsCapture")
     private val captureDispatcher = captureExecutor.asCoroutineDispatcher()
     private val playbackExecutor = newAudioThread("TsPlayback")
+    private val playbackDispatcher = playbackExecutor.asCoroutineDispatcher()
 
     // Dedicated single-thread scope for audio playback. The exception handler
     // is the last line of defence: the restart wrapper catches everything the
     // loop throws, but an unexpected failure of the wrapper itself must be
     // logged rather than reaching the process' default uncaught handler.
     private val playbackScope = CoroutineScope(
-        SupervisorJob() + playbackExecutor.asCoroutineDispatcher() +
+        SupervisorJob() + playbackDispatcher +
             kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
                 Log.e(TAG, "Playback scope failed", e)
             }
@@ -1280,9 +1285,20 @@ class AudioBridge(
      */
     private fun replaceAudioTrack(reason: String): AudioTrack? {
         val fresh = newAudioTrack() ?: run {
-            Log.e(TAG, "Output track rebuild failed ($reason); will retry")
+            // A device that keeps refusing a track would otherwise log an
+            // error every retry interval and crowd the 2000-line ring out of
+            // the diagnostics that actually explain why. WARN, and only the
+            // first failure plus every tenth afterwards.
+            trackRebuildFailures++
+            if (trackRebuildFailures == 1 || trackRebuildFailures % 10 == 0) {
+                Log.w(
+                    TAG,
+                    "Output track rebuild failed ($reason), consecutive=$trackRebuildFailures; will retry",
+                )
+            }
             return null
         }
+        trackRebuildFailures = 0
         val old = synchronized(trackSwapLock) {
             val previous = audioTrack
             audioTrack = fresh

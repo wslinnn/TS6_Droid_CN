@@ -402,11 +402,14 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
 
                 val patched = users.map { user ->
                     val isLocallyTalking = (user.id == myId && localTalking)
-                    // The native layer maintains isTalking itself since
-                    // tslib 0.2.0 (talk events + audio); the event-derived
-                    // set stays as fallback for talk bursts whose stop
-                    // event got dropped
-                    val isRemoteTalking = user.id in pruned || user.isTalking
+                    // Talk state comes from the event-derived set, NOT from the
+                    // roster snapshot. The native snapshot is only rebuilt when
+                    // the roster changes, so its `is_talking` flag freezes at
+                    // whatever it was during that rebuild: a user who was
+                    // speaking when someone else joined stays flagged as
+                    // talking forever. The event set is updated by
+                    // talk_status_start/stop, which arrive per burst.
+                    val isRemoteTalking = user.id in pruned
                     val shouldBeTalking = isLocallyTalking || isRemoteTalking
 
                     if (shouldBeTalking && !user.isTalking) user.withTalking(true)

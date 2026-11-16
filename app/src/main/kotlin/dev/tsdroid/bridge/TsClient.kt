@@ -304,6 +304,10 @@ class TsClient {
                 var lastEventAt = 0L
                 var lastServerVarsAt = 0L
                 var lastRefreshAt = 0L
+                // Last time the fallback path asked the native view for its
+                // revision (rate-limits a JNI read that would otherwise run
+                // once per loop iteration)
+                var lastRevisionCheckAt = 0L
                 // Native view revision the current Java-side snapshot was
                 // built from, and the newest one an event announced.
                 var appliedRevision: Long? = null
@@ -361,6 +365,11 @@ class TsClient {
                         val now = System.currentTimeMillis()
                         val viewChanged = pendingRevision != null && pendingRevision != appliedRevision
                         val due = now - lastRefreshAt >= STATE_REFRESH_INTERVAL_MS
+                        // The fallback probe is a JNI read; gate it on its own
+                        // interval so it costs one call per 2 s instead of one
+                        // per loop iteration (20/s idle, 200/s while capturing).
+                        val probeDue = now - lastRevisionCheckAt >= STATE_FALLBACK_REFRESH_MS
+                        if (probeDue) lastRevisionCheckAt = now
                         val refresh = when {
                             // Library without view events: previous behaviour
                             !revisionsReported -> events.isNotEmpty() || due
@@ -370,8 +379,8 @@ class TsClient {
                             // is an integer read, the rebuild it guards is not.
                             // A library without the getter (null) falls back to
                             // rebuilding on the timer, as before.
-                            else -> now - lastRefreshAt >= STATE_FALLBACK_REFRESH_MS &&
-                                readViewRevision(c)?.let { it != (appliedRevision ?: -1L) } ?: true
+                            probeDue -> readViewRevision(c)?.let { it != (appliedRevision ?: -1L) } ?: true
+                            else -> false
                         }
                         if (refresh) {
                             lastRefreshAt = now
@@ -385,11 +394,15 @@ class TsClient {
                         }
                         // The server only pushes counter/uptime updates when
                         // asked — poll while the info sheet is open so its
-                        // values don't freeze at connect-time numbers
+                        // values don't freeze at connect-time numbers. These
+                        // arrive as property changes that carry no view
+                        // revision, so the snapshot has to be re-read here or
+                        // online-count/uptime stay at their connect values.
                         if (pollServerVariables && now - lastServerVarsAt >= SERVER_VARIABLES_INTERVAL_MS) {
                             lastServerVarsAt = now
                             try {
                                 c.updateServerVariables()
+                                refreshState()
                             } catch (e: Throwable) {
                                 Log.w(TAG, "updateServerVariables failed", e)
                             }
