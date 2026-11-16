@@ -1626,6 +1626,14 @@ class AudioBridge(
                     // the track refused never reached the speaker: leaving it
                     // out lets the reference timeline advance with silence,
                     // which is what actually happened.
+                    //
+                    // A *partial* write still pushes the whole frame. The
+                    // reference is one frame per capture frame, not a sample
+                    // stream, so it cannot be shortened — the surplus samples
+                    // are treated as "played". That shifts the reference by up
+                    // to one frame on a short write; AudioTrack.write is
+                    // blocking and only short-writes on a dying track, where
+                    // the next frame rebuilds it anyway.
                     if (aecRunning) {
                         echoReference.push(mixBuffer, SystemClock.elapsedRealtime())
                     }

@@ -88,7 +88,12 @@ internal class TrackHealth(
     }
 
     companion object {
-        /** 5 frames = 100 ms at 20 ms per frame. */
+        /**
+         * 5 consecutive stalled frames. While audio is flowing that is 100 ms
+         * at 20 ms per frame; during silence the loop wakes every 250 ms, so
+         * the same streak can take ~1.25 s to accumulate — which is fine,
+         * there is nothing to lose while nothing is playing.
+         */
         const val DEFAULT_STREAK_LIMIT = 5
 
         /** Minimum spacing between automatic rebuilds. */
