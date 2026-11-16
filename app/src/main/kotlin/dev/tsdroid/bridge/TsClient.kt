@@ -102,6 +102,21 @@ class TsClient {
     private val _serverInfo = MutableStateFlow<ServerInfo?>(null)
     val serverInfo: StateFlow<ServerInfo?> = _serverInfo.asStateFlow()
 
+    /**
+     * Who is speaking right now, per the server's talk-status events.
+     *
+     * A StateFlow, not an event: the speaking set is latest-value state, so it
+     * must not depend on every single `talk_status_stop` surviving the event
+     * buffer. Consumers that only need the current set collect this instead of
+     * filtering [events].
+     */
+    private val _talkingUserIds = MutableStateFlow<Set<Int>>(emptySet())
+    val talkingUserIds: StateFlow<Set<Int>> = _talkingUserIds.asStateFlow()
+
+    /** Subset of [talkingUserIds] whose current burst is a whisper. */
+    private val _whisperTalkingUserIds = MutableStateFlow<Set<Int>>(emptySet())
+    val whisperTalkingUserIds: StateFlow<Set<Int>> = _whisperTalkingUserIds.asStateFlow()
+
     private val _commandErrors = MutableSharedFlow<CommandError>(replay = 1, extraBufferCapacity = 16)
     val commandErrors: SharedFlow<CommandError> = _commandErrors.asSharedFlow()
 
@@ -394,15 +409,21 @@ class TsClient {
                         }
                         // The server only pushes counter/uptime updates when
                         // asked — poll while the info sheet is open so its
-                        // values don't freeze at connect-time numbers. These
-                        // arrive as property changes that carry no view
-                        // revision, so the snapshot has to be re-read here or
-                        // online-count/uptime stay at their connect values.
+                        // values don't freeze at connect-time numbers.
+                        //
+                        // Only the server info is re-read here. The native
+                        // side already marks these property changes as view
+                        // changes (so the roster refreshes through the normal
+                        // path); doing a full refreshState() on top would mean
+                        // two roster serialisations per tick. This call exists
+                        // so the very first frame after opening the sheet is
+                        // not empty, and as a fallback for an older .so that
+                        // does not report the change.
                         if (pollServerVariables && now - lastServerVarsAt >= SERVER_VARIABLES_INTERVAL_MS) {
                             lastServerVarsAt = now
                             try {
                                 c.updateServerVariables()
-                                refreshState()
+                                refreshServerInfo()
                             } catch (e: Throwable) {
                                 Log.w(TAG, "updateServerVariables failed", e)
                             }
@@ -446,13 +467,39 @@ class TsClient {
 
     private fun handleEvent(event: Event) {
         when (event.type) {
-            "disconnected" -> _state.value = ConnectionState.DISCONNECTED
+            "disconnected" -> {
+                _state.value = ConnectionState.DISCONNECTED
+                // Nobody is talking on a dead session, and the ids are stale
+                // anyway — the next connection starts from an empty roster.
+                _talkingUserIds.value = emptySet()
+                _whisperTalkingUserIds.value = emptySet()
+            }
             "connected" -> _state.value = ConnectionState.CONNECTED
             // tslib 0.2.0 reconnect flow: a temporary drop emits
             // connection_lost and the native layer reconnects on its own;
             // only a permanent loss still emits "disconnected"
             "connection_lost" -> _state.value = ConnectionState.RECONNECTING
             "reconnected" -> _state.value = ConnectionState.CONNECTED
+            // Talk status is folded into StateFlows rather than forwarded as
+            // individual events: the speaking set is latest-value state, so a
+            // dropped `talk_status_stop` would otherwise leave a user shown as
+            // talking until they speak again. A StateFlow cannot lose the
+            // latest value by definition.
+            "talk_status_start" -> {
+                val userId = (event.data["user_id"] as? Number)?.toInt() ?: return
+                val isWhisper = event.data["is_whisper"] as? Boolean ?: false
+                _talkingUserIds.value = _talkingUserIds.value + userId
+                if (isWhisper) {
+                    _whisperTalkingUserIds.value = _whisperTalkingUserIds.value + userId
+                } else {
+                    _whisperTalkingUserIds.value = _whisperTalkingUserIds.value - userId
+                }
+            }
+            "talk_status_stop" -> {
+                val userId = (event.data["user_id"] as? Number)?.toInt() ?: return
+                _talkingUserIds.value = _talkingUserIds.value - userId
+                _whisperTalkingUserIds.value = _whisperTalkingUserIds.value - userId
+            }
             // Watchdog ping while the native reconnect keeps retrying —
             // informational only, the state stays RECONNECTING
             "connection_stalled" -> {
@@ -528,8 +575,24 @@ class TsClient {
         null
     }
 
-    private fun refreshState() {
+    /**
+     * Re-read only the server info (online counts, uptime).
+     *
+     * `server_info()` reads live connection state, so it does not need the
+     * roster to be re-serialised — which is what [refreshState] does for every
+     * user and channel. Used by the info-sheet poll, where the roster is
+     * irrelevant and a full rebuild every 5 s is pure overhead.
+     */
+    private fun refreshServerInfo() {
         val c = client ?: return
+        try {
+            _serverInfo.value = c.serverInfo
+        } catch (e: Throwable) {
+            Log.w(TAG, "refreshServerInfo failed", e)
+        }
+    }
+
+    private fun refreshState() {        val c = client ?: return
         try {
             _channels.value = c.channels?.filterNotNull() ?: emptyList()
             val rawUsers = c.users
@@ -600,6 +663,10 @@ class TsClient {
         downloadWaiters.reset(gone)
         uploadWaiters.reset(gone)
         fileListWaiters.reset(gone)
+        // A stale speaking set would keep rings lit for client ids that no
+        // longer exist on the next session
+        _talkingUserIds.value = emptySet()
+        _whisperTalkingUserIds.value = emptySet()
     }
 
     private fun closeClient(c: Client, reason: String) {

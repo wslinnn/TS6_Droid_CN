@@ -212,7 +212,10 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
     // tslib 0.2.0 — snapshots reflect the live talk state)
     private val _rawUsers = MutableStateFlow<List<User>>(emptyList())
 
-    // Set of currently talking user IDs (tracked via talk_status events)
+    // Set of currently talking user IDs. Mirrored from TsClient's StateFlow
+    // (not assembled from the event stream): the native side folds talk
+    // events into latest-value state so a dropped event cannot leave a user
+    // shown as talking forever. Locally pruned when a client id disappears.
     private val _talkingUserIds = MutableStateFlow<Set<Int>>(emptySet())
     val talkingUserIds: StateFlow<Set<Int>> = _talkingUserIds.asStateFlow()
 
@@ -400,22 +403,12 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
 
                 val myId = tsClient?.clientId
 
-                val patched = users.map { user ->
-                    val isLocallyTalking = (user.id == myId && localTalking)
-                    // Talk state comes from the event-derived set, NOT from the
-                    // roster snapshot. The native snapshot is only rebuilt when
-                    // the roster changes, so its `is_talking` flag freezes at
-                    // whatever it was during that rebuild: a user who was
-                    // speaking when someone else joined stays flagged as
-                    // talking forever. The event set is updated by
-                    // talk_status_start/stop, which arrive per burst.
-                    val isRemoteTalking = user.id in pruned
-                    val shouldBeTalking = isLocallyTalking || isRemoteTalking
-
-                    if (shouldBeTalking && !user.isTalking) user.withTalking(true)
-                    else if (!shouldBeTalking && user.isTalking) user.withTalking(false)
-                    else user
-                }
+                val patched = patchTalkingFlags(
+                    users = users,
+                    talkingUserIds = pruned,
+                    selfId = myId,
+                    isSelfTalking = localTalking,
+                )
                 // Derived from the patched list so there is exactly one
                 // definition of "speaking" in the app; the StateFlow drops
                 // identical sets, so a flip costs one set build, not a
@@ -502,6 +495,17 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
             }
             connectionService = service
             queriedPermChannels.clear()
+
+            // Speaking state is latest-value state on the native side; mirror
+            // it here. Pruning against the roster still happens in the users
+            // collector below, so a client id that vanishes without a stop
+            // event is cleaned up there.
+            viewModelScope.launch {
+                service.tsClient.talkingUserIds.collect { _talkingUserIds.value = it }
+            }
+            viewModelScope.launch {
+                service.tsClient.whisperTalkingUserIds.collect { _whisperTalkingUserIds.value = it }
+            }
 
             viewModelScope.launch {
                 service.tsClient.channels.collect { channels ->
@@ -728,18 +732,10 @@ class ServerViewModel(application: Application) : AndroidViewModel(application) 
                     Log.i(TAG, "Poked by $pokerName: $message")
                     _pokeEvents.tryEmit(pokerName to message)
                 }
-                "talk_status_start" -> {
-                    val userId = (event.data["user_id"] as? Number)?.toInt() ?: return
-                    _talkingUserIds.value = _talkingUserIds.value + userId
-                    val isWhisper = event.data["is_whisper"] as? Boolean ?: false
-                    _whisperTalkingUserIds.value =
-                        if (isWhisper) _whisperTalkingUserIds.value + userId
-                        else _whisperTalkingUserIds.value - userId
-                }
-                "talk_status_stop" -> {
-                    val userId = (event.data["user_id"] as? Number)?.toInt() ?: return
-                    _talkingUserIds.value = _talkingUserIds.value - userId
-                    _whisperTalkingUserIds.value = _whisperTalkingUserIds.value - userId
+                "talk_status_start", "talk_status_stop" -> {
+                    // Folded into TsClient's StateFlows and mirrored from
+                    // there — see the collection in bindToService. Ignored
+                    // here so the two paths cannot disagree.
                 }
                 "text_message" -> {
                     try {
@@ -1869,4 +1865,39 @@ internal fun displaySignatureOf(users: List<User>): Long {
         h = h * 31 + if (user.hasInputHardware) 1 else 0
     }
     return h
+}
+
+/**
+ * Patch the roster's `isTalking` flags from the live speaking set.
+ *
+ * The flag inside a roster snapshot is the value at the moment the snapshot
+ * was built, and snapshots are only rebuilt when the roster changes. A user
+ * who happened to be speaking during such a rebuild would keep a stale `true`
+ * — so talk state comes exclusively from [talkingUserIds] (the native
+ * talk-status events), never from the snapshot.
+ *
+ * The snapshot flag is still compared against the desired value, which is what
+ * lets a stale `true` be actively cleared rather than merely ignored: without
+ * that, the old value would survive on any User instance the patcher passes
+ * through unchanged.
+ *
+ * @param selfId the local client id, or null before the connection is ready
+ * @param isSelfTalking local VAD state — the server never echoes our own talk
+ *        status back, so the own row is driven locally
+ */
+internal fun patchTalkingFlags(
+    users: List<User>,
+    talkingUserIds: Set<Int>,
+    selfId: Int?,
+    isSelfTalking: Boolean,
+): List<User> = users.map { user ->
+    val isLocallyTalking = selfId != null && user.id == selfId && isSelfTalking
+    val isRemoteTalking = user.id in talkingUserIds
+    val shouldBeTalking = isLocallyTalking || isRemoteTalking
+
+    when {
+        shouldBeTalking && !user.isTalking -> user.withTalking(true)
+        !shouldBeTalking && user.isTalking -> user.withTalking(false)
+        else -> user
+    }
 }
