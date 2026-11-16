@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import dev.tslib.AudioConfig
 import dev.tslib.EchoCanceller
 import dev.tslib.OpusCodec
+import dev.tslib.OpusDecoder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -144,7 +145,11 @@ class AudioBridge(
     private var encoder: OpusCodec? = null
 
     // Per-user decoders and raw opus queues for playback mixing
-    private val userDecoders = ConcurrentHashMap<Int, OpusCodec>()
+    // Per-user decoders and raw opus queues for playback mixing.
+    // Decoder-only on purpose: the receive side never encodes, and OpusCodec
+    // would build an idle encoder per speaker (one per member on a big
+    // server, each created on this playback thread when they joined).
+    private val userDecoders = ConcurrentHashMap<Int, OpusDecoder>()
     private val userQueues = ConcurrentHashMap<Int, FrameQueue>()
 
     /**
@@ -1495,7 +1500,7 @@ class AudioBridge(
                 // Outside the per-frame try it used to kill the whole playback
                 // coroutine — and with it everyone's audio
                 val decoder = try {
-                    userDecoders.getOrPut(userId) { OpusCodec(audioConfig) }
+                    userDecoders.getOrPut(userId) { OpusDecoder(audioConfig) }
                 } catch (t: Throwable) {
                     failedDecoders.add(userId)
                     Log.e(TAG, "Opus decoder unavailable for user $userId; skipping that sender", t)

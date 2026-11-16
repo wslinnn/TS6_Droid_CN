@@ -27,6 +27,12 @@ package dev.tslib;
 public final class EchoCanceller implements AutoCloseable {
     private long nativePtr;
 
+    /** Noise-suppression levels, matching the native engine's values. */
+    public static final int NS_LOW = 0;
+    public static final int NS_MODERATE = 1;
+    public static final int NS_HIGH = 2;
+    public static final int NS_VERY_HIGH = 3;
+
     /**
      * Create an echo canceller.
      *
@@ -38,6 +44,28 @@ public final class EchoCanceller implements AutoCloseable {
      */
     public EchoCanceller(int sampleRate, int frameSamples, int tailSamples) {
         this.nativePtr = nativeCreate(sampleRate, frameSamples, tailSamples);
+        if (this.nativePtr == 0) {
+            throw new TsLibException("Failed to create EchoCanceller");
+        }
+    }
+
+    /**
+     * Create an echo canceller with an explicit noise-suppression level.
+     *
+     * <p>Higher levels strip more background noise but can dull weak
+     * consonants and breath sounds; {@link #NS_HIGH} is the default a device
+     * gets from the three-argument constructor. Everything else (AEC3 itself,
+     * the fixed capture post-gain) is identical.
+     *
+     * @param nsLevel one of {@link #NS_LOW}, {@link #NS_MODERATE},
+     *                {@link #NS_HIGH}, {@link #NS_VERY_HIGH}; out-of-range
+     *                values fall back to {@link #NS_HIGH}
+     * @throws TsLibException if creation fails
+     */
+    public EchoCanceller(int sampleRate, int frameSamples, int tailSamples,
+                         int nsLevel) {
+        this.nativePtr = nativeCreateWithNoiseSuppression(
+                sampleRate, frameSamples, tailSamples, nsLevel);
         if (this.nativePtr == 0) {
             throw new TsLibException("Failed to create EchoCanceller");
         }
@@ -106,6 +134,8 @@ public final class EchoCanceller implements AutoCloseable {
 
     // Native methods
     private static native long nativeCreate(int sampleRate, int frameSamples, int tailSamples);
+    private static native long nativeCreateWithNoiseSuppression(
+            int sampleRate, int frameSamples, int tailSamples, int nsLevel);
     private static native void nativeDestroy(long ptr);
     private static native void nativeReset(long ptr);
     private static native int nativeProcess(long ptr, short[] mic, short[] far, short[] out);

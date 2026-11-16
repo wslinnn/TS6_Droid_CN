@@ -362,17 +362,26 @@ class TsClient {
                         val viewChanged = pendingRevision != null && pendingRevision != appliedRevision
                         val due = now - lastRefreshAt >= STATE_REFRESH_INTERVAL_MS
                         val refresh = when {
-                            // Library without revisions: previous behaviour
+                            // Library without view events: previous behaviour
                             !revisionsReported -> events.isNotEmpty() || due
                             viewChanged -> true
-                            // Idle safety net: a state change that produced no
-                            // view event is still picked up, just later
-                            else -> now - lastRefreshAt >= STATE_FALLBACK_REFRESH_MS
+                            // Idle safety net: covers a state change whose view
+                            // event never reached us. Cheap first — the getter
+                            // is an integer read, the rebuild it guards is not.
+                            // A library without the getter (null) falls back to
+                            // rebuilding on the timer, as before.
+                            else -> now - lastRefreshAt >= STATE_FALLBACK_REFRESH_MS &&
+                                readViewRevision(c)?.let { it != (appliedRevision ?: -1L) } ?: true
                         }
                         if (refresh) {
                             lastRefreshAt = now
                             refreshState()
+                            // Prefer the revision the event announced; the
+                            // fallback path has none, so read it back — that is
+                            // what lets the next fallback tick skip.
                             appliedRevision = pendingRevision
+                                ?: readViewRevision(c)
+                                ?: appliedRevision
                         }
                         // The server only pushes counter/uptime updates when
                         // asked — poll while the info sheet is open so its
@@ -493,6 +502,17 @@ class TsClient {
                 refreshState()
             }
         }
+    }
+
+    /**
+     * Native view revision, or null when the loaded library predates the
+     * getter (an older `.so` with newer Kotlin). Null disables the shortcut —
+     * the fallback then rebuilds on the timer, exactly as before.
+     */
+    private fun readViewRevision(c: Client): Long? = try {
+        c.viewRevision
+    } catch (_: UnsatisfiedLinkError) {
+        null
     }
 
     private fun refreshState() {

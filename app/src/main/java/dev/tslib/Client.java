@@ -135,6 +135,21 @@ public class Client implements AutoCloseable {
     }
 
     /**
+     * Revision of the native view (users, channels, server info).
+     *
+     * <p>It changes only when one of those actually changes — not for chat
+     * messages, pokes or talk-status flips. Callers that poll {@link
+     * #getUsers()} can compare this first and skip the call entirely when
+     * nothing changed, which avoids re-serialising the whole roster.
+     *
+     * @return the current revision, monotonically increasing
+     */
+    public long getViewRevision() {
+        checkNotClosed();
+        return nativeGetViewRevision(nativePtr);
+    }
+
+    /**
      * Get our current channel ID.
      *
      * @return the channel ID, or {@code null} if not in a channel
@@ -434,6 +449,7 @@ public class Client implements AutoCloseable {
     private static native boolean nativeIsConnected(long ptr);
     private static native int nativeGetState(long ptr);
     private static native Integer nativeGetClientId(long ptr);
+    private static native long nativeGetViewRevision(long ptr);
     private static native Long nativeGetChannelId(long ptr);
     private static native Channel[] nativeGetChannels(long ptr);
     private static native User[] nativeGetUsers(long ptr);
