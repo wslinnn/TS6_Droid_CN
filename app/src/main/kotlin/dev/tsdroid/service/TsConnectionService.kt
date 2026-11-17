@@ -263,7 +263,11 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                     if (id in whisperNow) maybeNotifyWhisperTalk(id)
                 }
 
-                when (val action = overlaySpeakerAction(previous, speaking, overlayActiveSpeakerId)) {
+                // Display is debounced: during that window the pending speaker
+                // is who will actually be on screen, so the reducer must judge
+                // against it rather than the stale applied value.
+                val effectiveShown = pendingSpeakerId ?: overlayActiveSpeakerId
+                when (val action = overlaySpeakerAction(previous, speaking, effectiveShown)) {
                     is OverlaySpeakerAction.Show -> {
                         val speakerId = action.speakerId
                         val isWhisper = speakerId in whisperNow
@@ -935,7 +939,8 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
     }
 
     /** Publish who the overlay shows as speaking, with their cached avatar. */
-    private fun applyActiveSpeaker(speakerId: Int, isWhisper: Boolean) {        overlayActiveSpeakerId = speakerId
+    private fun applyActiveSpeaker(speakerId: Int, isWhisper: Boolean) {
+        overlayActiveSpeakerId = speakerId
         overlayActiveSpeakerIsWhisper = isWhisper
         overlayActiveSpeakerName = findUserNickname(speakerId)
         // Cached avatar only — ServerViewModel loads avatars as the user list
@@ -1371,9 +1376,14 @@ internal sealed interface OverlaySpeakerAction {
  * - a newcomer takes the overlay (last one wins, as before);
  * - a newcomer also beats a simultaneous stop, so the overlay does not blink
  *   through empty when one person hands over to another;
- * - a stop only clears the overlay when it is the speaker actually shown.
+ * - the shown speaker stopping hands over to whoever is still talking, rather
+ *   than blanking while somebody is audibly speaking — only an empty set
+ *   clears.
  *
- * @param shownSpeakerId who the overlay currently displays, or null
+ * @param shownSpeakerId who the overlay displays, or is about to display. This
+ *        must include the *pending* speaker: display is debounced, so during
+ *        that window the visible name is still the old one while the next
+ *        update already decided otherwise.
  */
 internal fun overlaySpeakerAction(
     previous: Set<Int>,
@@ -1381,10 +1391,19 @@ internal fun overlaySpeakerAction(
     shownSpeakerId: Int?,
 ): OverlaySpeakerAction {
     val started = current - previous
+    if (started.isNotEmpty()) return OverlaySpeakerAction.Show(started.last())
+
     val stopped = previous - current
-    return when {
-        started.isNotEmpty() -> OverlaySpeakerAction.Show(started.last())
-        stopped.isNotEmpty() && shownSpeakerId in stopped -> OverlaySpeakerAction.Clear
-        else -> OverlaySpeakerAction.None
+    if (shownSpeakerId != null && shownSpeakerId in stopped) {
+        // The person on screen went quiet. If somebody else is still talking,
+        // show them instead of blanking — otherwise a short interjection that
+        // ends would leave the overlay empty while the original speaker
+        // carries on.
+        return if (current.isEmpty()) {
+            OverlaySpeakerAction.Clear
+        } else {
+            OverlaySpeakerAction.Show(current.last())
+        }
     }
+    return OverlaySpeakerAction.None
 }

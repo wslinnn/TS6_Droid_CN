@@ -95,4 +95,70 @@ class OverlaySpeakerTest {
             overlaySpeakerAction(emptySet(), emptySet(), shownSpeakerId = null),
         )
     }
+
+    // --- the pending/display window and the hand-over fallback ---
+    //
+    // Display is debounced by 500 ms, so during that window the caller must
+    // pass the *pending* speaker rather than the applied one. These cases pin
+    // that contract; the previous implementation judged against the applied
+    // speaker only and got all three of them wrong.
+
+    @Test
+    fun `a short sentence that already ended must not be shown`() {
+        // {7} at t=0 is pending; {7} is gone at t=350 — before the 500 ms apply.
+        // With the pending speaker handed to the reducer, the stop matches and
+        // the pending display is cancelled instead of applying a stopped user.
+        assertEquals(
+            OverlaySpeakerAction.Clear,
+            overlaySpeakerAction(setOf(7), emptySet(), shownSpeakerId = 7),
+        )
+    }
+
+    @Test
+    fun `a handover survivor is not cleared by the previous speaker stopping`() {
+        // 7 timed out while 9 had already started: shown is 9 (pending), and
+        // the set still contains 9. Nothing to do — clearing here used to blank
+        // the overlay while 9 was still talking.
+        assertEquals(
+            OverlaySpeakerAction.None,
+            overlaySpeakerAction(setOf(7, 9), setOf(9), shownSpeakerId = 9),
+        )
+    }
+
+    @Test
+    fun `when the shown speaker stops, fall back to whoever is still talking`() {
+        // 9 interjected and stopped; 7 never stopped. Blanking would hide an
+        // audible speaker, so the overlay hands back to 7.
+        assertEquals(
+            OverlaySpeakerAction.Show(7),
+            overlaySpeakerAction(setOf(7, 9), setOf(7), shownSpeakerId = 9),
+        )
+    }
+
+    @Test
+    fun `falling back only happens for the shown speaker`() {
+        // A stop that does not involve the shown speaker must not reshuffle.
+        assertEquals(
+            OverlaySpeakerAction.None,
+            overlaySpeakerAction(setOf(7, 9), setOf(7), shownSpeakerId = 7),
+        )
+    }
+
+    @Test
+    fun `the shown speaker stopping with nobody left clears`() {
+        assertEquals(
+            OverlaySpeakerAction.Clear,
+            overlaySpeakerAction(setOf(9), emptySet(), shownSpeakerId = 9),
+        )
+    }
+
+    @Test
+    fun `a newcomer beats a stop even when the shown speaker left`() {
+        // Both happen in one update: the newcomer takes over rather than the
+        // overlay blinking through empty.
+        assertEquals(
+            OverlaySpeakerAction.Show(9),
+            overlaySpeakerAction(setOf(7), setOf(9), shownSpeakerId = 7),
+        )
+    }
 }

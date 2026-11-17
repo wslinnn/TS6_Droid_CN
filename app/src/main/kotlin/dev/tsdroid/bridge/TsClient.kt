@@ -592,7 +592,8 @@ class TsClient {
         }
     }
 
-    private fun refreshState() {        val c = client ?: return
+    private fun refreshState() {
+        val c = client ?: return
         try {
             _channels.value = c.channels?.filterNotNull() ?: emptyList()
             val rawUsers = c.users
