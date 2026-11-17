@@ -238,64 +238,65 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
 
         startMicWatchdog()
 
-        // Listen for talk status and poke events; received audio bypasses
-        // the event flow entirely (AudioBridge registers a native audio sink)
+        // Listen for poke events; received audio bypasses the event flow
+        // entirely (AudioBridge registers a native audio sink)
         tsClient.events.onEach { event ->
-            when (event.type) {
-                "poked" -> {
-                    val pokerName = event.data["poker_name"] as? String ?: return@onEach
-                    val message = event.data["message"] as? String ?: ""
-                    showPokeNotification(pokerName, message)
-                }
-                "talk_status_start" -> {
-                    val speakerId = (event.data["user_id"] as? Number)?.toInt()
-                    val isWhisper = event.data["is_whisper"] as? Boolean ?: false
-                    if (speakerId != null) {
-                        // Cancel any pending speaker stop
-                        speakerUpdateJob?.cancel()
-                        pendingSpeakerId = speakerId
-
-                        if (isWhisper) maybeNotifyWhisperTalk(speakerId)
-
-                        // Delay speaker update to avoid flickering
-                        speakerUpdateJob = serviceScope.launch {
-                            delay(SPEAKER_DELAY_MS)
-                            // Only update if still the pending speaker
-                            if (pendingSpeakerId == speakerId) {
-                                overlayActiveSpeakerId = speakerId
-                                overlayActiveSpeakerIsWhisper = isWhisper
-                                overlayActiveSpeakerName = findUserNickname(speakerId)
-                                // Cached avatar only — ServerViewModel loads avatars
-                                // as the user list refreshes; re-downloading on
-                                // every talk burst spams the server with transfers
-                                val speakerUser = tsClient.users.value.find { it.id == speakerId }
-                                val uid = speakerUser?.uid
-                                overlayActiveSpeakerAvatar =
-                                    if (!uid.isNullOrEmpty()) avatarCache.getAvatar(uid, speakerUser?.avatarId) else null
-                            }
-                        }
-                    }
-                }
-                "talk_status_stop" -> {
-                    val speakerId = (event.data["user_id"] as? Number)?.toInt()
-                    if (speakerId != null && speakerId == overlayActiveSpeakerId) {
-                        // Use delayed mechanism for speaker state changes
-                        pendingSpeakerId = null
-                        speakerUpdateJob?.cancel()
-                        speakerUpdateJob = serviceScope.launch {
-                            delay(SPEAKER_DELAY_MS)
-                            // Only update if still no pending speaker
-                            if (pendingSpeakerId == null) {
-                                overlayActiveSpeakerId = null
-                                overlayActiveSpeakerIsWhisper = false
-                                overlayActiveSpeakerName = null
-                                overlayActiveSpeakerAvatar = null
-                            }
-                        }
-                    }
-                }
+            if (event.type == "poked") {
+                val pokerName = event.data["poker_name"] as? String ?: return@onEach
+                val message = event.data["message"] as? String ?: ""
+                showPokeNotification(pokerName, message)
             }
         }.launchIn(serviceScope)
+
+        // Active speaker comes from the talk-status StateFlows, not from the
+        // event stream: those are latest-value state, so a dropped
+        // `talk_status_stop` (the event buffer drops under load) can no longer
+        // leave the overlay showing someone who already stopped talking.
+        // `events` is still used above for pokes, which are one-shot by nature.
+        serviceScope.launch {
+            var previous: Set<Int> = emptySet()
+            tsClient.talkingUserIds.collect { speaking ->
+                val whisperNow = tsClient.whisperTalkingUserIds.value
+                val started = speaking - previous
+                // Whisper toast: one per burst, for whoever just started one
+                for (id in started) {
+                    if (id in whisperNow) maybeNotifyWhisperTalk(id)
+                }
+
+                when (val action = overlaySpeakerAction(previous, speaking, overlayActiveSpeakerId)) {
+                    is OverlaySpeakerAction.Show -> {
+                        val speakerId = action.speakerId
+                        val isWhisper = speakerId in whisperNow
+                        speakerUpdateJob?.cancel()
+                        pendingSpeakerId = speakerId
+                        speakerUpdateJob = serviceScope.launch {
+                            delay(SPEAKER_DELAY_MS)
+                            if (pendingSpeakerId == speakerId) {
+                                applyActiveSpeaker(speakerId, isWhisper)
+                            }
+                        }
+                    }
+                    OverlaySpeakerAction.Clear -> {
+                        speakerUpdateJob?.cancel()
+                        pendingSpeakerId = null
+                        speakerUpdateJob = serviceScope.launch {
+                            delay(SPEAKER_DELAY_MS)
+                            if (pendingSpeakerId == null) clearActiveSpeaker()
+                        }
+                    }
+                    OverlaySpeakerAction.None -> Unit
+                }
+                previous = speaking
+            }
+        }
+        // The whisper flag can flip without the speaking set changing, so keep
+        // the ring colour in sync with that flow too.
+        serviceScope.launch {
+            tsClient.whisperTalkingUserIds.collect { whisper ->
+                val current = overlayActiveSpeakerId ?: return@collect
+                overlayActiveSpeakerIsWhisper = current in whisper
+            }
+        }
 
         tsClient.state.onEach { state ->
             overlayConnected = state == dev.tslib.ConnectionState.CONNECTED
@@ -933,10 +934,29 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
         overlayActiveSpeakerName = overlayActiveSpeakerId?.let { findUserNickname(it) }
     }
 
+    /** Publish who the overlay shows as speaking, with their cached avatar. */
+    private fun applyActiveSpeaker(speakerId: Int, isWhisper: Boolean) {        overlayActiveSpeakerId = speakerId
+        overlayActiveSpeakerIsWhisper = isWhisper
+        overlayActiveSpeakerName = findUserNickname(speakerId)
+        // Cached avatar only — ServerViewModel loads avatars as the user list
+        // refreshes; re-downloading on every talk burst spams the server with
+        // transfers
+        val speakerUser = tsClient.users.value.find { it.id == speakerId }
+        val uid = speakerUser?.uid
+        overlayActiveSpeakerAvatar =
+            if (!uid.isNullOrEmpty()) avatarCache.getAvatar(uid, speakerUser?.avatarId) else null
+    }
+
+    private fun clearActiveSpeaker() {
+        overlayActiveSpeakerId = null
+        overlayActiveSpeakerIsWhisper = false
+        overlayActiveSpeakerName = null
+        overlayActiveSpeakerAvatar = null
+    }
+
     private fun findUserNickname(userId: Int): String? {
         return tsClient.users.value.firstOrNull { it.id == userId }?.nickname
     }
-
     fun hideFloatingWindow() {
         Log.d(TAG, "hideFloatingWindow called")
         overlayView?.let { view ->
@@ -1321,5 +1341,50 @@ class TsConnectionService : LifecycleService(), ViewModelStoreOwner, SavedStateR
                 }
             }
         }
+    }
+}
+
+/**
+ * What the floating overlay should do with a speaking-set update.
+ *
+ * The overlay can only show one person, so "who is speaking" — a set, from the
+ * talk-status StateFlows — must be reduced to a single active speaker. This is
+ * a set diff rather than a stream of events on purpose: a dropped
+ * `talk_status_stop` used to leave the overlay showing someone who had already
+ * stopped, because the stop simply never arrived. With set diffs the state
+ * converges — the next observed set just no longer contains them.
+ */
+internal sealed interface OverlaySpeakerAction {
+    /** Nobody new started, and the shown speaker is still speaking. */
+    data object None : OverlaySpeakerAction
+
+    /** [speakerId] just started speaking and takes the overlay. */
+    data class Show(val speakerId: Int) : OverlaySpeakerAction
+
+    /** The shown speaker stopped and nobody replaced them. */
+    data object Clear : OverlaySpeakerAction
+}
+
+/**
+ * Decide the overlay action for one speaking-set update.
+ *
+ * - a newcomer takes the overlay (last one wins, as before);
+ * - a newcomer also beats a simultaneous stop, so the overlay does not blink
+ *   through empty when one person hands over to another;
+ * - a stop only clears the overlay when it is the speaker actually shown.
+ *
+ * @param shownSpeakerId who the overlay currently displays, or null
+ */
+internal fun overlaySpeakerAction(
+    previous: Set<Int>,
+    current: Set<Int>,
+    shownSpeakerId: Int?,
+): OverlaySpeakerAction {
+    val started = current - previous
+    val stopped = previous - current
+    return when {
+        started.isNotEmpty() -> OverlaySpeakerAction.Show(started.last())
+        stopped.isNotEmpty() && shownSpeakerId in stopped -> OverlaySpeakerAction.Clear
+        else -> OverlaySpeakerAction.None
     }
 }
