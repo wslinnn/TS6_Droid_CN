@@ -118,6 +118,7 @@ import dev.tsdroid.viewmodel.DownloadState
 import dev.tsdroid.viewmodel.FileAttachment
 import dev.tsdroid.viewmodel.ServerViewModel
 import dev.tsdroid.viewmodel.displaySignatureOf
+import dev.tsdroid.viewmodel.shareTargetUsersOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -152,9 +153,11 @@ fun ServerScreen(
         }
         indexed
     }
-    val treeUsers = remember(roster, viewModel.myClientId) {
-        val myId = viewModel.myClientId
-        if (myId == null) users else users.filter { it.id != myId }
+    // Users the file-manager share picker may target: everyone but us. Named
+    // for its purpose on purpose — this is NOT the channel tree's roster (the
+    // tree must include our own row).
+    val shareTargetUsers = remember(roster, viewModel.myClientId) {
+        shareTargetUsersOf(users, viewModel.myClientId)
     }
     val channelIcons by viewModel.channelIcons.collectAsStateWithLifecycle()
     val userAvatars by viewModel.avatars.collectAsStateWithLifecycle()
@@ -554,10 +557,11 @@ fun ServerScreen(
             // Channel tree — full screen
             ChannelTree(
                 channels = channels,
-                // Roster-stable list: the speaking ring comes from
-                // `speakingUserIds` below, so a talk flip recomposes the rows
-                // that changed instead of rebuilding the whole tree
-                users = treeUsers,
+                // The full roster, including our own row. Roster-stable: the
+                // speaking ring comes from `speakingUserIds` below, so a talk
+                // flip recomposes the rows that changed instead of rebuilding
+                // the whole tree.
+                users = users,
                 onChannelClick = { channelId ->
                     val channel = channels.find { it.id == channelId }
                     if (channel?.hasPassword == true) {
@@ -609,7 +613,7 @@ fun ServerScreen(
                         currentPath = currentFilePath,
                         files = fileList,
                         isLoading = fileManagerLoading,
-                        users = treeUsers,
+                        users = shareTargetUsers,
                         permissionHints = channelPermissions.hints,
                         permissionHintsKnown = channelPermissions.known,
                         onNavigateToFolder = { viewModel.navigateToFolder(it) },

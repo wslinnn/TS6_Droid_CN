@@ -1901,3 +1901,16 @@ internal fun patchTalkingFlags(
         else -> user
     }
 }
+
+/**
+ * Users the file-manager share picker may target: everyone except us.
+ *
+ * Deliberately a separate function from the channel tree's roster. The tree
+ * must show our own row; sharing to yourself is meaningless. These two lists
+ * were once the same variable and the tree silently lost the local user.
+ *
+ * @param selfId our client id, or null before the connection is ready — in
+ *        which case nobody can be excluded yet
+ */
+internal fun shareTargetUsersOf(users: List<User>, selfId: Int?): List<User> =
+    if (selfId == null) users else users.filter { it.id != selfId }
